@@ -8,54 +8,95 @@ import networkx as nx
 from graphein.protein.edges.distance import compute_distmat
 from os import path
 import pandas as pd
+from collections import Counter
+from typing import Tuple, List, Optional, Union, Dict
+import itertools
+from copy import deepcopy
 
-def check_identity(node_pair):
+def check_identity(node_pair: Tuple):
     '''
     Takes a tuple of nodes in the following format: 'A:PRO:57', 'A:THR:178')
     '''
-    if node_pair[0].split(':')[1] == node_pair[1].split(':')[1]:
-        return True
-    else:
-        return False
-
-def check_identity_same_chain(node_pair):
-    '''
-    Takes a tuple of nodes in the following format: 'A:PRO:57', 'A:THR:178')
-    '''
-    if node_pair[0].split(':')[0] == node_pair[1].split(':')[0]:
-        return True
-    else:
-        return False
-
-def check_cross_positions(node_pair_pair):
-    '''
-    Take a list of paired associated nodes like [('A:SER:71', 'A:SER:71'), ('A:GLU:161', 'A:GLU:161')]
-    This function checks if a pair of association nodes have same or different positions
-    Returns TRUE if in both association pairs, they are equal or both are different
-    And FALSE if a pair have different positions and the other have same positions or vice-versa
-    '''
-    print(node_pair_pair)
-    if ((node_pair_pair[0][0] == node_pair_pair[0][1]) and (node_pair_pair[1][0] == node_pair_pair[1][1])) or ((node_pair_pair[0][0] != node_pair_pair[0][1]) and (node_pair_pair[1][0] != node_pair_pair[1][1])):
-        return True
-    else:
-        return False
-
-
-def check_neighborhoods(node_pair, contact_map1, residue_map1, contact_map2, residue_map2):
-    '''
-    Takes a tuple of nodes in the following format: 'A:PRO:57', 'A:THR:178')
-    '''
-
-    list_neig_aa_1 = [list(residue_map1.keys())[list(residue_map1.values()).index(i)][2] for i, x in enumerate(contact_map1[residue_map1[node_pair[0].split(":")[0], int(node_pair[0].split(":")[2]), node_pair[0].split(":")[1]]]) if x < 8]
-    list_neig_aa_2 = [list(residue_map2.keys())[list(residue_map2.values()).index(i)][2] for i, x in enumerate(contact_map2[residue_map2[node_pair[1].split(":")[0], int(node_pair[1].split(":")[2]), node_pair[1].split(":")[1]]]) if x < 8]
-
-    #levenshtein requires conda install conda-forge::python-levenshtein
-    lev_dist = textdistance.levenshtein.distance(list_neig_aa_1,list_neig_aa_2)
     
-    if lev_dist < 5:
+    if isinstance(node_pair[-1], tuple):
+        raise f"The node of second graph is a tuple {node_pair}"
+    
+    second_graph_node = node_pair.pop(-1) 
+    node_ref = []
+    
+    while True:
+        if isinstance(node_pair[-1], tuple):
+            node_pair = node_pair[0]
+        elif isinstance(node_pair[-1], str):
+            node_ref = node_pair[-1]
+            break
+        else:
+            raise f"Unexpected type of node. Node: {node_pair[-1]}, type: {type(node_pair[-1])}"
+        
+    if node_ref.split(":")[1] == node_pair.split(':')[1]:
         return True
     else:
         return False
+    
+def most_frequent_chain(atom_list: List):
+    """
+    Determine the most frequent chain of atom_list 
+    """
+    
+    chains = [atom.split(':')[0] for atom in atom_list]
+    chain_counts = Counter(chains)
+    most_common_chain, _ = chain_counts.most_common(1)[0]
+    return most_common_chain
+
+def extract_internal_nodes(node: Tuple):
+    node_list = []
+    
+    node_ref = node.pop(-1)
+    
+    while True: 
+        if isinstance(node[0], tuple):
+            node_list.append(node.pop(-1))
+        elif isinstance(node[0], str):
+            node_list.extende([node[0], node[1]])
+            break
+        else:
+            raise f"Unexpected type of node: {node}, type: {type(node)}" 
+    
+    return node_list, node_ref
+
+def check_identity_same_chain(node_pair: Tuple):
+    '''
+    Takes a tuple of nodes where each node is a tuple of atoms,
+    e.g., (('A:PRO:57', 'A:GLY:58'), 'B:ALA:179'))
+    '''
+    
+    node_list, node_ref = extract_internal_nodes(node_pair) 
+    ref_chain = node_ref.split(":")[0] 
+    
+    chains_node = set([node.split(":")[0] for node in node_list])
+    
+    if len(chains_node) > 1:
+        raise f"There are different chains in the node tuple: {chains_node}"
+    
+    return "".join(chains_node) == ref_chain
+
+
+def check_cross_positions(node_pair_pair: Tuple[Tuple]):
+    """Check if there are cross position of residues between nodes
+
+    Args:
+        node_pair_pair (Tuple[Tuple]): A tuple that contain tuple of nodes
+
+    Returns:
+        bool: Return true if you don't have cross position between residues
+    """
+    
+    node1 = node_pair_pair[0]
+    node2 = node_pair_pair[1]
+    not_cross = all(node1[k] != node2[k] for k in range(len(node1)))
+    permutation = set(node1) == set(node2)
+    
+    return not_cross and not permutation
 
 def compute_atom_distance(pdb_file, atom_name1, chain_id1, position1, atom_name2, chain_id2, position2):
     parser = PDBParser(QUIET=True)
@@ -91,46 +132,337 @@ def compute_atom_distance(pdb_file, atom_name1, chain_id1, position1, atom_name2
     return distance
 
 
+def generate_edges(nodes, distance_matrix, residue_maps_unique):
+    """Make edges between associated nodes using distance_matrix criteria and a filter of cross positions.
+    The edges are converted from indices associated nodes to residues associated nodes
+
+    Args:
+        nodes (List[Tuple]): A list of all possible associated nodes
+        distance_matrix (numpy.ndarray): A distance matrix of each residue in same protein
+        residue_maps_unique (dict): A dictionary that retrieve the residue from a given indice.
+        This dictionary has residues from all proteins with unique indice for each one
+
+    Returns:
+        edges (List[List[Tuple]]): A list of edges to make the associated graph
+    """
+    edges = []
+    
+    for i in range(len(nodes)):
+        for j in range(i + 1, len(nodes)):
+            node1 = nodes[i]
+            node2 = nodes[j]
+            
+            # Checks if each residue from specific position are different
+            if all(node1[k] != node2[k] for k in range(len(node1))):
+                distances = [distance_matrix[node1[k], node2[k]] for k in range(len(node1))]
+                
+                if all(dist > 0 for dist in distances):
+                    mean_distance = np.mean(distances)
+                    std_distance = np.std(distances)
+                    cv_distance = (std_distance / mean_distance) * 100
+                    
+                    if cv_distance < 15:
+                        edges.append((node1, node2))
+    
+    edges = convert_edges_to_residues(edges, residue_maps_unique)
+    
+    edges = [edge for edge in edges if not set(edge[0]) == set(edge[1]) and check_cross_positions(edge)]
+    
+    return edges
+
+def convert_edges_to_residues(edges: List[Tuple], residue_maps_unique: Dict) -> List[Tuple]:
+    """Convert the edges that contains tuple of indices to tuple of residues
+
+    Args:
+        edges (List[Tuple]): A list that contains tuple of edges that are made of tuples of indices
+        residue_maps_unique (Dict): A map that relates the indice to residue
+
+    Returns:
+        convert_edge (List[Tuple]): Return edges converted to residues notation
+    """
+    converted_edges = []
+
+    for edge in edges:
+        node1, node2 = edge
+
+        converted_node1 = tuple(f"{residue_maps_unique[idx][0]}:{residue_maps_unique[idx][2]}:{residue_maps_unique[idx][1]}" for idx in node1)
+        converted_node2 = tuple(f"{residue_maps_unique[idx][0]}:{residue_maps_unique[idx][2]}:{residue_maps_unique[idx][1]}" for idx in node2)
+
+        if set(converted_node1) != set(converted_node2):
+            converted_edges.append((converted_node1, converted_node2))
+    
+    return converted_edges
+
+def check_multiple_neighboors(node, contact_maps, residue_maps, residue_maps_unique, ranges_graph):
+    
+    list_neighboors = []
+    for residue_indice in node:
+        for i, ranges in enumerate(ranges_graph):
+            if ranges[0] <= residue_indice < ranges[1]:
+                node_name = residue_maps_unique[residue_indice]
+                residue_map, contact_map = residue_maps[i], contact_maps[i]
+                enum = enumerate(contact_map[residue_map[node_name]])
+                neighboors = [list(residue_map.keys())[list(residue_map.values()).index(i)][2] for i, x in enum if x < 8]
+                list_neighboors.append(neighboors)
+                break
+
+    for list1, list2 in itertools.combinations(list_neighboors, 2):
+        lev_dist = textdistance.levenshtein.distance(list1, list2)
+        if lev_dist >= 5:
+            return False
+    else:
+        return True
+    
+def check_multiple_chains(node: Tuple, residue_maps_unique: Dict):
+    """Check if at least on node is from different chain
+
+    Args:
+        node (tuple): Tuple of residues that together makes a node
+        residue_maps_unique (Dict): A dictionary of all residues
+
+    Returns:
+        boolean: Return true if there's a different chain in node
+    """
+    
+    chains = set([residue_maps_unique[node_indice][0] for node_indice in node])
+    if len(chains) > 1:
+        return False
+    else:
+        return True
+
+def filter_reduce_maps(contact_maps: List, residue_maps: List, nodes_graphs: List, distance_threshold: float = 10) -> Tuple:
+    """Receive a list of contact_maps and filter all values greater than `distance_threshold`. Besides that
+    Generate a unique residue map joining residues of all proteins. 
+
+    Args:
+        contact_maps (List): List of `contact map` of all proteins
+        residue_maps (List): List of `residue map` of all proteins
+        nodes_graphs (list): List of nodes in graph
+        distance_threshold (float, optional): Threshold to filter big distances. Defaults to 10.
+
+    Returns:
+        Tuple: A tuple that contains `filtered contact maps` and `full residues map`
+    """
+    filtered_contact_maps = []
+    
+    for contact_map, residue_map, nodes in zip(contact_maps, residue_maps, nodes_graphs):
+        indices = [residue_map[tuple([chain, int(res_num), res_name])]
+                        for chain, res_name, res_num in (node.split(":") for node in nodes)
+                        if tuple([chain, int(res_num), res_name]) in residue_map]
+        
+        filtered_contact_map = contact_map[np.ix_(indices, indices)]
+        filtered_contact_map[filtered_contact_map >= distance_threshold] = 0
+        filtered_contact_maps.append(filtered_contact_map)  
+    
+
+    full_residue_maps = [
+        {(chain, int(res_num), res_name): i for i, (chain, res_name, res_num) in enumerate(
+            node.split(":") for node in sorted_nodes
+        )}
+        for sorted_nodes in nodes_graphs
+    ] 
+        
+    return filtered_contact_maps, full_residue_maps
+
+def indices_graphs(graphs):
+    """Make a list that contains indices that indicates the position of each protein in graph
+
+    Args:
+        graphs (List): A list of protein's resdiues. Each List has their own residues.
+
+    Returns:
+        ranges_graph (List[Tuple]): A list of indicesthat indicates the position of each protein in matrix
+    """
+    
+    lenght_actual = 0
+    ranges_graph = []
+    for i in range(len(graphs)):
+        graph_lenght = len(graphs[i])
+        
+        new_lenght_actual = lenght_actual + graph_lenght
+        ranges_graph.append((lenght_actual, new_lenght_actual))
+        lenght_actual = new_lenght_actual
+    return ranges_graph
+    
+def create_neighboor_similarity(nodes_graphs, ranges_graph, total_lenght, neighboors, threshold=0.95):
+    """Create a neighboor's similarity matrix using the cosine similiraty between the vectors that represent the neighboors from each residue.
+    The comparassion is made between residues from different proteins
+
+    Args:
+        nodes_graphs (List): A list of all protein's nodes
+        ranges_graph (List[Tuple]): A list of indices that indicates the position of each protein in matrix
+        total_lenght (int): The total number of residues
+        neighboors (dict): A dictionary that contains the residue's neighboors of each protein
+        threshold (float, optional): Similarity threshold. Defaults to 0.95.
+
+    Returns:
+        matrix (np.ndarray): A numpy neigboor's similarity matrix
+    """
+    
+    matrix = np.zeros((total_lenght, total_lenght))
+
+    for i in range(len(nodes_graphs)):
+        for j in range(i+1, len(nodes_graphs)):
+            neighboorsA = neighboors[i]
+            neighboorsB = neighboors[j]
+
+            similarities = np.array([cosine_similarity(neighboorsA[product[0]], neighboorsB[product[1]]) for product in itertools.product(neighboorsA, neighboorsB)])
+            similarities = np.reshape(similarities, (len(neighboorsA), len(neighboorsB)))
+            
+            startA, endA, startB, endB = *ranges_graph[i], *ranges_graph[j]
+            
+            matrix[startA:endA, startB:endB] = similarities
+            matrix[startB:endB, startA:endA] = similarities.T
+
+    matrix[matrix < threshold] = 0
+    matrix[matrix >= threshold] = 1
+    
+    return matrix            
+            
+def association_product(graphs: List, association_mode: str, nodes_graphs: List, contact_maps: List, residue_maps_all: List, centroid_threshold: float = 10):
+    """Make the associated graph through the cartesian product of graphs, using somem modifications to filter nodes and edges.
+    Args:
+        graphs (List): A list of graphs
+        association_mode (str): Association mode of edges
+        nodes_graphs (List): A list of nodes graphs
+        contact_maps (List): A list of contact maps
+        residue_maps_all (List): Full residues maps
+        centroid_threshold (float, optional): Threshold to filter big distances. Defaults to 10.
+
+    Returns:
+        nx.NetworwGraph: The associated graph
+    """
+   
+    total_lenght_graphs = sum([len(graph.nodes()) for graph in graphs])
+    
+    filtered_contact_maps, full_residue_maps = filter_reduce_maps(contact_maps=contact_maps, residue_maps=residue_maps_all, nodes_graphs=nodes_graphs, distance_threshold=centroid_threshold)
+
+    prot_all_res = [[":".join(node.split(":")[:2]) for node in nodes_graph] for nodes_graph in nodes_graphs]
+    prot_all_res = np.array([node for sublist in prot_all_res for node in sublist])
+    
+    ranges_graph = indices_graphs(graphs)
+    
+    neighboors_vec = {i: graph_message_passing(graph, 'resources/atchley_aa.csv', use_degree=False, norm_features=False) for i, graph in enumerate(graphs)}
+
+    current_value = 0
+    residue_maps_unique = {}
+    for residue_map in full_residue_maps:
+        residue_maps_unique.update({value + current_value: key for key, value in residue_map.items()})
+        current_value += len(residue_map)
+        
+
+    neighboors_similarity = create_neighboor_similarity(nodes_graphs, ranges_graph, total_lenght_graphs, neighboors_vec)
+    
+    if association_mode == "identity":
+
+        identity_matrix = np.equal(prot_all_res[:, np.newaxis], prot_all_res).astype(int)
+        np.fill_diagonal(identity_matrix, 0)
+        associated_nodes_matrix = np.multiply(neighboors_similarity, identity_matrix)
+    
+    elif association_mode == "similarity":
+
+        associated_nodes_matrix = np.ones((total_lenght_graphs, total_lenght_graphs)) * neighboors_similarity
+        np.fill_diagonal(associated_nodes_matrix, 0)
+    
+    lenght_actual = 0
+    
+    distance_matrix = np.zeros((total_lenght_graphs, total_lenght_graphs))    
+    
+    for i in range(len(graphs)):
+        graph_lenght = len(graphs[i])
+        
+        new_lenght_actual = lenght_actual + graph_lenght
+        
+        associated_nodes_matrix[lenght_actual:new_lenght_actual, lenght_actual:new_lenght_actual] = 0
+        distance_matrix[lenght_actual:new_lenght_actual, lenght_actual:new_lenght_actual] = filtered_contact_maps[i]
+    
+        lenght_actual = new_lenght_actual
+        
+    block_indices = {}
+    all_possible_nodes = []
+
+    reference_graph = len(graphs[0].nodes())
+
+    for i in range(reference_graph):
+        
+        block_indices[i] = np.where(associated_nodes_matrix[:, i] > 0)[0]
+
+        block_elements = [[i]]
+
+        for start, end in ranges_graph[1:]:
+            elements = [index for index in block_indices[i] if start <= index < end]
+            
+            if not elements:
+                break
+            
+            block_elements.append([index for index in block_indices[i] if start <= index < end])
+        else:
+            all_possible_nodes.extend(list(itertools.product(*block_elements)))    
+
+    all_possible_nodes = [node for node in all_possible_nodes if check_multiple_chains(node, residue_maps_unique)]
+    
+    edges = generate_edges(nodes=all_possible_nodes, distance_matrix=distance_matrix, residue_maps_unique=residue_maps_unique)
+
+    G_sub = nx.Graph()
+    
+    for sublist in edges:
+        node_a = sublist[0]
+        node_b = sublist[1]  
+        
+        G_sub.add_edge(node_a, node_b)
+        
+    for nodes in G_sub.nodes:
+        if nodes[0].startswith('A') and nodes[1].startswith('A'):
+            G_sub.nodes[nodes]['chain_id'] = 'red'
+        elif nodes[0].startswith('C') and nodes[1].startswith('C'):
+            G_sub.nodes[nodes]['chain_id'] = 'blue'
+        else:
+            G_sub.nodes[nodes]['chain_id'] = None
+    
+    G_sub.remove_nodes_from(list(nx.isolates(G_sub)))
+    print(f"G_sub: {G_sub}")
+    return G_sub
 
 def build_contact_map(pdb_file):
+    
     # Step 1: Parse the PDB file
     parser = PDBParser()
     structure = parser.get_structure('protein', pdb_file)
     
     # Step 2: Extract CA atoms
-    ca_atoms = []
+    carbon_atoms = []
     residue_map = []
     residue_map_all = []
+
     for model in structure:
         for chain in model:
             for residue in chain:
-                if residue.has_id('CB'):
-                    #print('Im not gly, have CB')
-                    #residue_id = (chain.id, residue.id[1])
-                    residue_id = (chain.id, residue.id[1], residue.get_resname())
-                    residue_map.append(residue_id[0:2])
-                    residue_map_all.append(residue_id)
-                    ca_atoms.append(residue['CB'].get_vector()) #need to change the name of the object later, since it is CB not only CA 
-                #elif residue.has_id('CA'):
-                else:
-                    #print('Im gly, not have CB')
-                    residue_id = (chain.id, residue.id[1], residue.get_resname())
-                    residue_map.append(residue_id[0:2])
-                    residue_map_all.append(residue_id)
-                    ca_atoms.append(residue['CA'].get_vector())
+                
+                residue_id = (chain.id, residue.id[1], residue.get_resname())
+                
+                residue_map.append(residue_id[0:2])
+                residue_map_all.append(residue_id)
+                
+                
+                # Checks whether the amino acid has beta carbon or not, since Glycine does not have a side chain
+                carbon = "CB" if residue.has_id("CB") else "CA"
+                carbon_atoms.append(residue[carbon].get_vector())
+
     residue_map_dict = {tup: i for i, tup in enumerate(residue_map)}
     residue_map_dict_all = {tup: i for i, tup in enumerate(residue_map_all)}
+
     # Step 3: Calculate distances and build contact map
-    num_atoms = len(ca_atoms)
+    num_atoms = len(carbon_atoms)
     contact_map = np.zeros((num_atoms, num_atoms), dtype=float)
-    for i in range(num_atoms):
-        for j in range(num_atoms):
-            distance = (ca_atoms[i] - ca_atoms[j]).norm()
+    for i in range(num_atoms-1):
+        for j in range(i+1, num_atoms):
+            distance = (carbon_atoms[i] - carbon_atoms[j]).norm()
             #if distance <= distance_cutoff:
             #    contact_map[i, j] = True
             #    contact_map[j, i] = True
             contact_map[i, j] = distance
             contact_map[j, i] = distance
+
     return contact_map, residue_map_dict, residue_map_dict_all
 
 def find_contact_residues(contact_map, residue_map, residue1, residue2):
@@ -146,13 +478,6 @@ def find_contact_residues(contact_map, residue_map, residue1, residue2):
     residue2_index = residue_map.get(residue2, None)
 
     return contact_map[residue1_index, residue2_index]
-    #if contact_map[residue1_index, residue2_index]:
-    #    return True
-    #else:
-    #    return False
-
-
-
 
 def coefficient_of_variation(x, y):
     """
@@ -169,7 +494,6 @@ def coefficient_of_variation(x, y):
     std_dev = np.std([x, y])
     cv = (std_dev / mean) * 100
     return cv
-
 
 
 def get_residues_within_distance(pdb_file, chain_ids, target_chain_ids, distance_threshold):
@@ -353,67 +677,107 @@ def add_sphere_residues_old(node_names_molA, molA_path, node_names_molB, molB_pa
     io.save(output_pdb)
 '''
 
-def add_sphere_residues(node_names_molA, molA_path, node_names_molB, molB_path, output_path, node_name):
-    # Read PDB file
-    parser = PDBParser()
-    structure_A = parser.get_structure('protein', molA_path)
-    structure_B = parser.get_structure('protein', molB_path)
+# def add_sphere_residues(node_names_molA, molA_path, node_names_molB, molB_path, output_path, node_name):
+#     # Read PDB file
+#     parser = PDBParser()
+#     structure_A = parser.get_structure('protein', molA_path)
+#     structure_B = parser.get_structure('protein', molB_path)
 
-    # Create a new structure to hold the spheres
-    new_structure_A = Structure.Structure("spheres")
-    new_structure_B = Structure.Structure("spheres")
+#     # Create a new structure to hold the spheres
+#     new_structure_A = Structure.Structure("spheres")
+#     new_structure_B = Structure.Structure("spheres")
 
-    # Create a new model and chain for each mol
-    new_model_A = Model.Model(0)
-    new_chain_A = Chain.Chain('X')
-    new_model_A.add(new_chain_A)
-    new_structure_A.add(new_model_A)
+#     # Create a new model and chain for each mol
+#     new_model_A = Model.Model(0)
+#     new_chain_A = Chain.Chain('X')
+#     new_model_A.add(new_chain_A)
+#     new_structure_A.add(new_model_A)
 
-    new_model_B = Model.Model(0)
-    new_chain_B = Chain.Chain('X')
-    new_model_B.add(new_chain_B)
-    new_structure_B.add(new_model_B)
+#     new_model_B = Model.Model(0)
+#     new_chain_B = Chain.Chain('X')
+#     new_model_B.add(new_chain_B)
+#     new_structure_B.add(new_model_B)
 
-    # Keep track of added residues to avoid duplicates
-    added_residues_A = set()
-    added_residues_B = set()
+#     # Keep track of added residues to avoid duplicates
+#     added_residues_A = set()
+#     added_residues_B = set()
 
-    # Add sphere residues to the new structure
-    for residue_info in node_names_molA:
-        chain_id, residue_name, residue_number = residue_info.split(':')
-        residue_key = (chain_id, int(residue_number))
-        if residue_key not in added_residues_A:
-            residue = structure_A[0][chain_id][int(residue_number)]
-            #ca_atom = residue['CA']
-            atom_coords = [atom.coord for atom in residue]
-            centroid_coords = np.mean(atom_coords, axis=0)
-            sphere_residue = create_sphere_residue(residue_name, residue_number, centroid_coords)
-            new_chain_A.add(sphere_residue)
-            added_residues_A.add(residue_key)
+#     # Add sphere residues to the new structure
+#     for residue_info in node_names_molA:
+#         chain_id, residue_name, residue_number = residue_info.split(':')
+#         residue_key = (chain_id, int(residue_number))
+#         if residue_key not in added_residues_A:
+#             residue = structure_A[0][chain_id][int(residue_number)]
+#             #ca_atom = residue['CA']
+#             atom_coords = [atom.coord for atom in residue]
+#             centroid_coords = np.mean(atom_coords, axis=0)
+#             sphere_residue = create_sphere_residue(residue_name, residue_number, centroid_coords)
+#             new_chain_A.add(sphere_residue)
+#             added_residues_A.add(residue_key)
 
-    for residue_info in node_names_molB:
-        chain_id, residue_name, residue_number = residue_info.split(':')
-        residue_key = (chain_id, int(residue_number))
-        if residue_key not in added_residues_B:
-            residue = structure_B[0][chain_id][int(residue_number)]
-            #ca_atom = residue['CA']
-            atom_coords = [atom.coord for atom in residue]
-            centroid_coords = np.mean(atom_coords, axis=0)
-            sphere_residue = create_sphere_residue(residue_name, residue_number, centroid_coords)
-            new_chain_B.add(sphere_residue)
-            added_residues_B.add(residue_key)
+#     for residue_info in node_names_molB:
+#         chain_id, residue_name, residue_number = residue_info.split(':')
+#         residue_key = (chain_id, int(residue_number))
+#         if residue_key not in added_residues_B:
+#             residue = structure_B[0][chain_id][int(residue_number)]
+#             #ca_atom = residue['CA']
+#             atom_coords = [atom.coord for atom in residue]
+#             centroid_coords = np.mean(atom_coords, axis=0)
+#             sphere_residue = create_sphere_residue(residue_name, residue_number, centroid_coords)
+#             new_chain_B.add(sphere_residue)
+#             added_residues_B.add(residue_key)
 
-    # Write the new PDB file
-    io = PDBIO()
-    io.set_structure(new_structure_A)
-    io.save(path.join(output_path,f'spheres_molA_{node_name}.pdb'))
+#     # Write the new PDB file
+#     io = PDBIO()
+#     io.set_structure(new_structure_A)
+#     io.save(path.join(output_path,f'spheres_molA_{node_name}.pdb'))
 
-    io = PDBIO()
-    io.set_structure(new_structure_B)
-    io.save(path.join(output_path,f'spheres_molB_{node_name}.pdb'))
+#     io = PDBIO()
+#     io.set_structure(new_structure_B)
+#     io.save(path.join(output_path,f'spheres_molB_{node_name}.pdb'))
 
+def add_sphere_residues(graphs, list_node_names_mol, output_path, node_name):
+    
+    for graph, node_names_mol in zip(graphs, list_node_names_mol):
+        mol_path = graph[1]
+        
+        # Read PDB file
+        parser = PDBParser()
+        structure = parser.get_structure('protein', mol_path)
 
-def create_subgraph_with_neighbors(full_graph_A, full_graph_B, association_graph, node, max_nodes):
+        # Create a new structure to hold the spheres
+        new_structure = Structure.Structure("spheres")
+        
+        # Create a new model and chain for each mol
+        new_model = Model.Model(0)
+        new_chain = Chain.Chain('X')
+        new_model.add(new_chain)
+        new_structure.add(new_model)
+
+        # Keep track of added residues to avoid duplicates
+        added_residues = set()
+
+        # Add sphere residues to the new structure
+        for residue_info in node_names_mol:
+            chain_id, residue_name, residue_number = residue_info.split(':')
+            residue_key = (chain_id, int(residue_number))
+            if residue_key not in added_residues:
+                residue = structure[0][chain_id][int(residue_number)]
+                #ca_atom = residue['CA']
+                atom_coords = [atom.coord for atom in residue]
+                centroid_coords = np.mean(atom_coords, axis=0)
+                sphere_residue = create_sphere_residue(residue_name, residue_number, centroid_coords)
+                new_chain.add(sphere_residue)
+                added_residues.add(residue_key)
+
+        name = mol_path.replace("\\", "_").replace("/", "_")
+        # Write the new PDB file
+        io = PDBIO()
+        io.set_structure(new_structure)
+        io.save(path.join(output_path,f'spheres_{name}_{node_name}.pdb'))
+
+    
+def create_subgraph_with_neighbors(graphs, association_graph, node, max_nodes):
     """
     This is mostly an implementation of the BFS algorithm with some modification
     
@@ -451,19 +815,17 @@ def create_subgraph_with_neighbors(full_graph_A, full_graph_B, association_graph
 
         #get euclidian distance between current node and neighbors to sort the neighbors list 
         #Mol A
-        graph_matrix_A = full_graph_A.graph["pdb_df"]
-        current_node_index_A = graph_matrix_A[graph_matrix_A['node_id'] == current_node[0]].index[0]
-        neighbor_indices_A = [graph_matrix_A[graph_matrix_A['node_id'] == nodes[0]].index[0] for nodes in neighbors if nodes != current_node]
-        dists_A = compute_distmat(graph_matrix_A).iloc[neighbor_indices_A, current_node_index_A]
+        dists = []
         
-        #Mol B
-        graph_matrix_B = full_graph_B.graph["pdb_df"]
-        current_node_index_B = graph_matrix_B[graph_matrix_B['node_id'] == current_node[0]].index[0]
-        neighbor_indices_B = [graph_matrix_B[graph_matrix_B['node_id'] == nodes[0]].index[0] for nodes in neighbors if nodes != current_node]
-        dists_B = compute_distmat(graph_matrix_B).iloc[neighbor_indices_B, current_node_index_A]
+        for graph in graphs:
+            graph_matrix = graph[0].graph["pdb_df"]
+            current_node_index = graph_matrix[graph_matrix['node_id'] == current_node[0]].index[0]
+            neighbor_indices = [graph_matrix[graph_matrix['node_id'] == nodes[0]].index[0] for nodes in neighbors if nodes != current_node]
+            dist = compute_distmat(graph_matrix).iloc[neighbor_indices, current_node_index]
+            dists.append(dist)
 
-        #get a average distance for sorting
-        average_list = (dists_A + dists_B)/2
+        # Get a average distance for sorting
+        average_list = sum(dists)/len(graphs)
         
         # Pair each nodes with its corresponding numeric value
         paired_list = list(zip(average_list, neighbors))
@@ -476,7 +838,7 @@ def create_subgraph_with_neighbors(full_graph_A, full_graph_B, association_graph
 
         for neighbor in neighbors_sorted:
             # If neighbor is not visited and adding it won't exceed max_nodes
-            #if neighbor not in visited and subgraph.number_of_nodes() + 1 <= max_nodes:
+            # if neighbor not in visited and subgraph.number_of_nodes() + 1 <= max_nodes:
             if neighbor not in visited: #try to visit all in the neighbor layer
                 # Add the neighbor to the subgraph
                 subgraph.add_node(neighbor)
@@ -561,6 +923,29 @@ def normalize_rows(arr):
         
     return normalized_array
 
+def calculate_atchley_average(node, read_emb):
+    # Inicializar um vetor para somar os fatores de Atchley
+    atchley_factors_sum = np.zeros(read_emb.shape[1] - 1)  # Exclui a coluna de aminoácidos
+    
+    if isinstance(node, tuple):
+        # Iterar sobre cada átomo no nó (tupla)
+        for atom in node:
+            residue = convert_3aa1aa(atom.split(":")[1])
+            
+            # Obter os fatores de Atchley para o resíduo
+            atchley_factors = read_emb[read_emb.AA == residue].iloc[:, 1:].values[0]
+            
+            # Somar os fatores de Atchley
+            atchley_factors_sum += atchley_factors
+        
+        # Calcular a média dos fatores de Atchley
+        atchley_factors_avg = atchley_factors_sum / len(node)
+    else:
+        residue = convert_3aa1aa(node.split(":")[1])
+        atchley_factors_avg = read_emb[read_emb.AA == residue].iloc[:, 1:].values[0]
+    
+    return atchley_factors_avg
+
 def graph_message_passing(graph, embedding_path, use_degree, norm_features):
     '''
     This function perform a single message passing in the graph nodes to update graph node features
@@ -568,23 +953,38 @@ def graph_message_passing(graph, embedding_path, use_degree, norm_features):
     '''
     #get adjacency matrix
     adj = nx.adjacency_matrix(graph).todense()
+    
     #get distance matrix
     pdb_df = graph.graph["pdb_df"]
+    duplicated_node_ids = pdb_df[pdb_df.duplicated(subset='node_id', keep=False)]
+
+    # Exiba as labels duplicadas
+    if not duplicated_node_ids.empty:
+        print("Duplicated node_ids found:")
+        print(duplicated_node_ids['node_id'].values)
+    else:
+        print("No duplicated node_ids found.")
     pdb_df = pdb_df.set_index('node_id', inplace=False)
-    order = graph.nodes
+
+    order = []
+    for node in graph.nodes:
+        if isinstance(node, tuple):
+            node_id = "|".join(node)
+        else:
+            node_id = node
+        order.append(node_id)
     ordered_pdb_df = pdb_df.reindex(order)
     dist_df = compute_distmat(ordered_pdb_df)
     dist_m = dist_df.values.tolist()
-    # element-wise multiplication (also known as the Hadamard product) divided by 1
+
     mult = 1 / (np.array(adj) * np.array(dist_m))
     mult[mult == np.inf] = 0 # replace inf to 0 
-    #divide each element by the sum of the values at each row so that we end up with the weigths ranging from 0 to 1
     row_sums = np.sum(mult, axis=1)
     weights_m = mult / row_sums[:, np.newaxis]
 
     #multiply the weight matrix by the feature matrix
     read_emb = pd.read_csv(embedding_path)
-    feature_matrix = np.array([read_emb[read_emb.AA == convert_3aa1aa(node.split(":")[1])].iloc[:,1:].values.tolist()[0] for node in graph.nodes])
+    feature_matrix = np.array([calculate_atchley_average(node, read_emb) for node in graph.nodes]) 
 
     #message passing by multiplying weight matrix (former adjacency) and the feature matrix
     message_passing_m = weights_m @ feature_matrix
@@ -614,7 +1014,6 @@ def graph_message_passing(graph, embedding_path, use_degree, norm_features):
     
     return feat_MP_dict
 
-
 def cosine_similarity(array1, array2):
     # Ensure the arrays are 1-dimensional
     assert array1.ndim == 1 and array2.ndim == 1, "Arrays must be 1-dimensional"
@@ -635,16 +1034,18 @@ def check_similarity(node_pair, rep_molA, rep_molB, threshold):
     '''
     Takes a tuple of nodes in the following format: 'A:PRO:57', 'A:THR:178')
     '''
-    cos_sim = cosine_similarity(rep_molA[node_pair[0]], rep_molB[node_pair[1]])
+    # print(f"node_pair: {node_pair}\nrep_molA{rep_molA}")
+    pairA = "|".join(node_pair[0]) if isinstance(node_pair[0], tuple) else node_pair[0] 
+    pairB = "|".join(node_pair[1]) if isinstance(node_pair[1], tuple) else node_pair[1] 
+    cos_sim = cosine_similarity(rep_molA[pairA], rep_molB[pairB])
     #debug
     if cos_sim > threshold:
-        print(node_pair[0])
-        print(node_pair[1])
-        print(rep_molA[node_pair[0]])
-        print(rep_molB[node_pair[1]])
+        print(pairA)
+        print(pairB)
+        print(rep_molA[pairA])
+        print(rep_molB[pairB])
         print(cos_sim)
 
-    #
     if cos_sim > threshold:
         return True
     else:
