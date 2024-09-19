@@ -91,12 +91,14 @@ def check_cross_positions(node_pair_pair: Tuple[Tuple]):
         bool: Return true if you don't have cross position between residues
     """
     
-    node1 = node_pair_pair[0]
-    node2 = node_pair_pair[1]
-    not_cross = all(node1[k] != node2[k] for k in range(len(node1)))
-    permutation = set(node1) == set(node2)
+    nodeA, nodeB = node_pair_pair[0], node_pair_pair[1]
+    setA, setB = set(nodeA), set(nodeB)
+    lenA, lenB = len(setA), len(setB)
+    not_cross = all(nodeA[k] != nodeB[k] for k in range(len(nodeA))) 
+    repeated = (lenA == 1 and lenB != 1) or (lenB == 1 and lenA != 1)
+    permutation = setA == setB
     
-    return not_cross and not permutation
+    return not_cross and not permutation and not repeated
 
 def compute_atom_distance(pdb_file, atom_name1, chain_id1, position1, atom_name2, chain_id2, position2):
     parser = PDBParser(QUIET=True)
