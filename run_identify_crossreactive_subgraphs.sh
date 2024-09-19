@@ -1,6 +1,5 @@
 python3 main.py \
---molA_path pdb_input/pmhc_mage3_5brz_renumber.pdb \
---molB_path pdb_input/pmhc_titin_5bs0_renumber.pdb \
+--mols_paths pdb_input/pmhc_titin_5bs0_renumber.pdb,pdb_input/pmhc_mage3_5brz_renumber.pdb \
 --interface_list resources/interface_MHC_unique.csv \
 --run_name mageXtitin_sim_teste \
 --association_mode similarity \

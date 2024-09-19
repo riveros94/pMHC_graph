@@ -1,112 +1,93 @@
 from graphein.protein.config import ProteinGraphConfig
 from graphein.protein.graphs import construct_graph
-from graphein.protein.visualisation import plotly_protein_structure_graph
-from graphein.protein.edges.distance import add_distance_threshold, compute_distmat
+from graphein.protein.edges.distance import add_distance_threshold
 from graphein.protein.features.nodes.dssp import rsa, secondary_structure
 from graphein.protein.config import DSSPConfig
-from graphein.protein.subgraphs import extract_surface_subgraph, extract_subgraph, extract_subgraph_from_secondary_structure
+from graphein.protein.subgraphs import extract_subgraph
 from functools import partial
+from time import time
 import networkx as nx
 import matplotlib.pyplot as plt
-from utils import check_identity, compute_atom_distance, build_contact_map, find_contact_residues, coefficient_of_variation, check_identity_same_chain, check_neighborhoods, create_sphere_residue, add_sphere_residues, create_subgraph_with_neighbors, check_cross_positions, graph_message_passing, check_similarity
-from itertools import combinations, compress
+from utils.tools import association_product,build_contact_map, add_sphere_residues, create_subgraph_with_neighbors
 import plotly.graph_objects as go
-import numpy as np
-from itertools import product
-import pandas as pd
 from pathlib import Path
 from os import path
-from typing import Callable, Any, Union, Optional 
+from typing import Callable, Any, Union, Optional, List, Tuple
+from operator import itemgetter
 
 
 class AssociatedGraph:
-    def __init__(self, graphA, molA_path, graphB, molB_path, output_path, path_full_subgraph, run_name, association_mode = "identity",  interface_list = None, centroid_threshold = 10):
+    def __init__(self, graphs: List[Tuple], output_path: str, path_full_subgraph: str, run_name: str, association_mode: str = "identity",  interface_list: Union[None, list] = None, centroid_threshold: int = 10):
         if interface_list:
             self.interface_list = interface_list
         else:
             self.interface_list = None
-            
-        self.graphA = graphA
-        self.graphB = graphB
-        self.molA_path = molA_path
-        self.molB_path = molB_path
+        
+        self.graphs = graphs
         self.output_path = output_path
         self.run_name = run_name
         self.association_mode = association_mode
+        self.centroid_threshold = centroid_threshold
         Path(self.output_path).mkdir(parents=True, exist_ok=True)
         self.path_full_subgraph = path_full_subgraph
         
-        self.associated_graph = self._construct_graph(self.graphA, self.molA_path, self.graphB, self.molB_path, self.association_mode )
+        self.associated_graph = self._construct_graph(self.graphs, self.association_mode, self.centroid_threshold )
         
+    def _build_multiple_contact_map(self, graphs: List[Tuple]) -> List[Tuple]:
+
+        contact_residues_map = []
+        for item in graphs:
+            contact_map, residue_map, residue_map_all = build_contact_map(item[1])
+            contact_residues_map.append((item[0], item[1], contact_map, residue_map, residue_map_all))
+
+        return contact_residues_map
+        
+    def _gen_associated_graph(self, graphsList: List[Tuple], association_mode: str, centroid_threshold: int):
+        
+        graphsList = sorted(graphsList, key=lambda x: len(x[0].nodes()))
+        
+        contact_maps = [graph[2] for graph in graphsList]
     
-    def _construct_graph(self, graphA, molA_path, graphB, molB_path, association_mode):
-        #Create a contact map and a list with residue names order as the contact map
-        #We do not need to do this, since graphein already build internally the distance matrix considering the centroid
-        #This matrix can be obtained from: graph.graph["pdb_df"]
-        #The contact matrix can be obtained from: graph.graph["dist_mat"]
-        #Usually this dist_mat is not updated in related to the pdb_df after graph subsets, so it is important to double check it 
-        #Instead of using the dist_mat we can build it again using compute_distmat(graph.graph["pdb_df"])
-        contact_map1, residue_map1, residue_map1_all = build_contact_map(molA_path) #_all means with resname
-        contact_map2, residue_map2, residue_map2_all = build_contact_map(molB_path)
+        graphs = [graph[0] for graph in graphsList]
+        residue_maps = [graph[3] for graph in graphsList]
+        residue_maps_all = [graph[4] for graph in graphsList]       
+ 
+        """
+        def sort_key(node):
+            chain, residue, number = node.split(':')
+            return (chain, residue, int(number))
         
-        #Run the cartesian product to create the association graphs
-        #This can be substituted for just getting the combinations of node names, no need to build the original graphs!
-        M = nx.cartesian_product(graphA, graphB)
+        sorted_nodes_graphs = [sorted(graph.nodes(), key=sort_key) for graph in graphs]
+        """
         
-        if association_mode == 'identity':
-            #Filter the pair of nodes based on identity, same chain and neighborhoods
-            select_ident = [i for i in list(M) if check_identity(i) and check_identity_same_chain(i) and check_neighborhoods(i, contact_map1, residue_map1_all, contact_map2, residue_map2_all)]
+        nodes_graphs = [list(graph.nodes()) for graph in graphs]
+
+        start = time()
+        print(f"Vou iniciar o produto cartesiano")
         
-        elif association_mode == 'similarity':
-            message_passing_molA = graph_message_passing(graphA, 'resources/atchley_aa.csv', use_degree=False, norm_features=False)
-            message_passing_molB = graph_message_passing(graphB, 'resources/atchley_aa.csv', use_degree=False, norm_features=False)
-            #Filter the pair of nodes 
-            select_ident = [i for i in list(M) if check_similarity(i, message_passing_molA, message_passing_molB, threshold=0.95) and check_identity_same_chain(i)]
-        else:
-            print(f'Mode {association_mode} is not a valid mode')
-            quit 
-            
-        #Create the association graphs
-        paired_graphs = [list(pair) for pair in combinations(select_ident, 2)]
-
-        #Filter out pairs of pairs (edges) based on cross positions
-        #For instance, if an association node has a pair with same positions 169 and 169 and its paired association node has a pair with different positions (169 and 170, for instance), it does not make sense to connect these nodes
-        paired_graphs_filtered = [i for i in paired_graphs if check_cross_positions(i)]
-
-        #To build the edges between association nodes, we first calculate the d1 distance, then d2 distance and then the d1d2 ratio
-        #calculate d1 distance
-        d1 = [find_contact_residues(contact_map1, residue_map1, (i[0][0].split(':')[0],int(i[0][0].split(':')[2])),  (i[1][0].split(':')[0],int(i[1][0].split(':')[2]))) for i in paired_graphs_filtered]
-        #calculate d2 distance
-        d2 = [find_contact_residues(contact_map2, residue_map2, (i[0][1].split(':')[0],int(i[0][1].split(':')[2])),  (i[1][1].split(':')[0],int(i[1][1].split(':')[2]))) for i in paired_graphs_filtered]
-        #calculate d1d2 ratio distance using coefficient of variation
-        d1d2 = [coefficient_of_variation(a,b) for a,b in zip(d1,d2)]
-        #generate the pair of connected nodes indicating the edges
-        new_nodes_edges = [paired_graphs_filtered[n] for n,m in enumerate(d1) if d1[n] < 10 and d2[n] < 10 and d1[n] > 0 and d2[n] > 0 and d1d2[n] < 15 and (paired_graphs_filtered[n][0][0] != paired_graphs_filtered[n][1][1] and paired_graphs_filtered[n][0][1] != paired_graphs_filtered[n][1][0])]
-
-        # Build the new graph
-        G_sub = nx.Graph()
-        # Add nodes
-        for sublist in new_nodes_edges:
-            for edge in sublist:
-                G_sub.add_node(edge[0])
-                G_sub.add_node(edge[1])
-        # Add edges
-        for sublist in new_nodes_edges:
-            G_sub.add_edge(sublist[0], sublist[1])
-
-        # Remove nodes with no edges
-        G_sub.remove_nodes_from(list(nx.isolates(G_sub)))
-
-        # Add chain as attribute to color the nodes 
-        for nodes in G_sub.nodes:
-            if nodes[0].startswith('A') and nodes[1].startswith('A'):
-                G_sub.nodes[nodes]['chain_id'] = 'red'
-            elif nodes[0].startswith('C') and nodes[1].startswith('C'):
-                G_sub.nodes[nodes]['chain_id'] = 'blue'
-            else:
-                G_sub.nodes[nodes]['chain_id'] = None
+        M = association_product(graphs, association_mode=association_mode, nodes_graphs=nodes_graphs, contact_maps=contact_maps, residue_maps_all=residue_maps_all, centroid_threshold=centroid_threshold)
         
-        return G_sub 
+        end = time()
+        print(f"Tempo para produto cartesiano: {end - start}")
+        
+        return M
+    
+    def _construct_graph(self, graphs, association_mode, centroid_threshold):
+        # Create a contact map and a list with residue names order as the contact map
+        # We do not need to do this, since graphein already build internally the distance matrix considering the centroid
+        # This matrix can be obtained from: graph.graph["pdb_df"]
+        # The contact matrix can be obtained from: graph.graph["dist_mat"]
+        # Usually this dist_mat is not updated in related to the pdb_df after graph subsets, so it is important to double check it 
+        # Instead of using the dist_mat we can build it again using compute_distmat(graph.graph["pdb_df"])
+        
+        
+        contact_residues_maps = self._build_multiple_contact_map(graphs)
+        
+        contact_residues_maps_sorted = sorted(contact_residues_maps, key=itemgetter(1)) 
+               
+        associated_graph = self._gen_associated_graph(contact_residues_maps_sorted, association_mode, centroid_threshold)
+
+        return associated_graph
     
     def draw_graph(self, show = True, save = True):
         if not show and not save:
@@ -132,7 +113,7 @@ class AssociatedGraph:
             if nodes[0].startswith('C') and nodes[1].startswith('C'): #i.e. peptide nodes
                 count_pep_nodes += 1
                 #print(nodes)
-                bfs_subgraph = create_subgraph_with_neighbors(self.graphA, self.graphB, G_sub, nodes, 20)
+                bfs_subgraph = create_subgraph_with_neighbors(self.graphs, G_sub, nodes, 20)
                 for nodes2 in bfs_subgraph.nodes:
                     if nodes2[0].startswith('A') and nodes2[1].startswith('A'):
                         bfs_subgraph.nodes[nodes2]['chain_id'] = 'red'
@@ -150,11 +131,13 @@ class AssociatedGraph:
 
                     #write PDB with the common subgraphs as spheres
                     get_node_names = list(bfs_subgraph.nodes())
-                    node_names_molA = [i[0] for i in get_node_names]
-                    node_names_molB = [i[1] for i in get_node_names]
-
+                    list_node_names = []
+                    for n in range(len(self.graphs)):
+                        node_names = [i[n] for i in get_node_names]
+                        list_node_names.append(node_names)
+  
                     #create PDB with spheres
-                    add_sphere_residues(node_names_molA, self.molA_path, node_names_molB, self.molB_path, self.output_path, nodes[0])
+                    add_sphere_residues(self.graphs, list_node_names, self.output_path, nodes[0])
                     #add_sphere_residues(node_names_molB, path_protein2, path_protein2.split('.pdb')[0]+'_spheres.pdb')
                 else:
                     print(f"The subgraph centered at the {nodes[0]} node does not satisfies the requirements")

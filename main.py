@@ -1,18 +1,8 @@
 from graphein.protein.config import ProteinGraphConfig
-from graphein.protein.graphs import construct_graph
-from graphein.protein.visualisation import plotly_protein_structure_graph
-from graphein.protein.edges.distance import add_distance_threshold, compute_distmat
+from graphein.protein.edges.distance import add_distance_threshold
 from graphein.protein.features.nodes.dssp import rsa, secondary_structure
 from graphein.protein.config import DSSPConfig
-from graphein.protein.subgraphs import extract_surface_subgraph, extract_subgraph, extract_subgraph_from_secondary_structure
 from functools import partial
-import networkx as nx
-import matplotlib.pyplot as plt
-from utils.tools import check_identity, compute_atom_distance, build_contact_map, find_contact_residues, coefficient_of_variation, check_identity_same_chain, check_neighborhoods, create_sphere_residue, add_sphere_residues, create_subgraph_with_neighbors, check_cross_positions, graph_message_passing, check_similarity
-from itertools import combinations, compress
-import plotly.graph_objects as go
-import numpy as np
-from itertools import product
 import pandas as pd
 from pathlib import Path
 from os import path
@@ -39,16 +29,19 @@ from graph import *
 #pdb_file, DSSP=executable
 '''
 
+# Define a custom argument type for a list of strings
+def list_of_strings(arg):
+    return arg.split(',')
 
 #command example
 #python3 --molA_path /home/helder/Projects/pMHC_graphs/pdbs_teste/pmhc_mage3_5brz_renumber.pdb --molB_path /home/helder/Projects/pMHC_graphs/pdbs_teste/pmhc_titin_5bs0_renumber.pdb --interface_list /home/helder/Projects/pMHC_graphs/interface_MHC_unique.csv --centroid_threshold 10 --run_name teste_sim --association_mode similarity --output_path output5
 
 ################################################################################################
 parser = argparse.ArgumentParser(description='Building common subgraphs')
-parser.add_argument('--molA_path', type=str, default='',
-                    help='Path to the first PDB file.')
-parser.add_argument('--molB_path', type=str, default='',
-                    help='Path to the first PDB file.')
+parser.add_argument('--mols_paths', type=list_of_strings, default='',
+                    help='Path list of PDB files.')
+# parser.add_argument('--molB_path', type=str, default='',
+#                     help='Path to the first PDB file.')
 parser.add_argument('--interface_list', type=str, default='',
                     help='File with a canonical list of MHC residues at the interface with TCR. No header needed for this file.')
 parser.add_argument('--centroid_threshold', type=int, default=10,
@@ -80,10 +73,9 @@ def get_exposed_residues_mhc(graph, inter_list, rsa_threshold = 0.1, chains_pept
 inter_list = pd.read_csv(args.interface_list, header=None)[0].to_list()
 #Threshold for centroid distance
 centroid_threshold=args.centroid_threshold
-#Path to Mol A
-molA_path = args.molA_path
-#Path to Mol B
-molB_path = args.molB_path
+# List of paths
+mols_paths = args.mols_paths
+
 #output folder
 output_path = args.output_path
 #Path to full common subgraph
@@ -100,18 +92,18 @@ config = ProteinGraphConfig(edge_construction_functions=[partial(add_distance_th
                             granularity="centroids") #using CB granularity we are missing the Gly residues!!!
 
 
-#Build general pMHC interface graph for MolA
-g1 = Graph(config=config, graph_path=molA_path)
-s_g1 = get_exposed_residues_mhc(g1, inter_list=inter_list, rsa_threshold= 0.1, chains_peptide=["C"], chain_mhc="A")
+graphs = []
 
-#Build general pMHC interface graph for MolB
-g2 = Graph(config=config, graph_path=molB_path)
-s_g2 = get_exposed_residues_mhc(g2, inter_list=inter_list, rsa_threshold= 0.1, chains_peptide=["C"], chain_mhc="A")
+for mol_path in mols_paths:
+    #Build general pMHC interface graph for MolA
+    g = Graph(config=config, graph_path=mol_path)
+    s_g = get_exposed_residues_mhc(g, inter_list=inter_list, rsa_threshold= 0.1, chains_peptide=["C"], chain_mhc="A")
+    graphs.append((s_g, mol_path))
 
-
-G = AssociatedGraph(graphA = s_g1, molA_path = molA_path, graphB = s_g2, molB_path=molB_path, output_path=output_path, path_full_subgraph=path_full_subgraph,association_mode=args.association_mode, run_name= args.run_name,interface_list=inter_list, centroid_threshold=10)
+# G = AssociatedGraph(graphA = s_g1, molA_path = molA_path, graphB = s_g2, molB_path=molB_path, output_path=output_path, path_full_subgraph=path_full_subgraph,association_mode=args.association_mode, run_name= args.run_name,interface_list=inter_list, centroid_threshold=10)
+G = AssociatedGraph(graphs= graphs, output_path=output_path, path_full_subgraph=path_full_subgraph, association_mode=args.association_mode, run_name= args.run_name, interface_list=inter_list, centroid_threshold=args.centroid_threshold)
 G_sub = G.associated_graph
 
-G.draw_graph(show = False)
+G.draw_graph(show = True)
 
 G.grow_subgraph_bfs()
