@@ -96,9 +96,9 @@ def check_cross_positions(node_pair_pair: Tuple[Tuple]):
     lenA, lenB = len(setA), len(setB)
     not_cross = all(nodeA[k] != nodeB[k] for k in range(len(nodeA))) 
     repeated = (lenA == 1 and lenB != 1) or (lenB == 1 and lenA != 1)
-    permutation = setA == setB
+    # permutation = setA == setB
     
-    return not_cross and not permutation and not repeated
+    return not_cross  and not repeated
 
 def compute_atom_distance(pdb_file, atom_name1, chain_id1, position1, atom_name2, chain_id2, position2):
     parser = PDBParser(QUIET=True)
@@ -356,7 +356,7 @@ def association_product(graphs: List, association_mode: str, nodes_graphs: List,
     neighboors_similarity = create_neighboor_similarity(nodes_graphs, ranges_graph, total_lenght_graphs, neighboors_vec)
     
     if association_mode == "identity":
-
+        print("Entrei aqui")
         identity_matrix = np.equal(prot_all_res[:, np.newaxis], prot_all_res).astype(int)
         np.fill_diagonal(identity_matrix, 0)
         associated_nodes_matrix = np.multiply(neighboors_similarity, identity_matrix)
