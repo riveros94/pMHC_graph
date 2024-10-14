@@ -60,6 +60,10 @@ def parser_args():
                         help='Path to store output results.')
     parser.add_argument('--neighbor_similarity_cutoff', type=float, default=0.95,
                         help="Threshold for neighbor's similarity ")
+    parser.add_argument('--residues_similarity_cutoff', type=float, default=0.95,
+                        help="Threshold for residue's similarity")
+    parser.add_argument('--factors_path', type=str, default=None,
+                        help="Factors for calculating the residue similarity ")
     parser.add_argument('--rsa_filter', type=none_or_float, default=0.1,
                         help="Threshold for filter residues by RSA")
     parser.add_argument('--rsa_similarity_threshold', type=float, default=0.95,
@@ -164,8 +168,8 @@ def main():
         return
         
     selected_files = get_user_selection(mols_files, mols_path)
-    # selected_files = [("pdb_input/pmhc_titin_5bs0_renumber.pdb", "pmhc_titin_5bs0_renumber.pdb")]*8
-
+    # selected_files = [("pdb_input/pmhc_titin_5bs0_renumber.pdb", "pmhc_titin_5bs0_renumber.pdb"), ("pdb_input/pmhc_mage3_5brz_renumber.pdb", "pmhc_mage3_5brz_renumber.pdb") ]
+    # selected_files = [("pdb_input/pmhc_titin_5bs0_renumber.pdb", "pmhc_titin_5bs0_renumber.pdb") ]*50
     #output folder
     output_path = args.output_path
     #Path to full common subgraph
@@ -181,7 +185,6 @@ def main():
     graphs = []
 
     for mol_path in selected_files:
-        # Build general pMHC interface graph for MolA
         g = Graph(config=config, graph_path=mol_path[0])
         params = residues_lists[mol_path[1]]
         
@@ -196,10 +199,11 @@ def main():
         s_g = get_exposed_residues(graph=g, rsa_filter=rsa_filter, params=params )
         graphs.append((s_g, mol_path[0]))
 
-    G = AssociatedGraph(graphs=graphs, output_path=output_path, path_full_subgraph=path_full_subgraph, association_mode=args.association_mode, run_name= args.run_name, centroid_threshold=centroid_threshold, neighbor_similarity_cutoff=neighbor_similarity_cutoff, rsa_similarity_threshold=rsa_similarity_threshold)
-    G_sub = G.associated_graph
+    G = AssociatedGraph(graphs=graphs, output_path=output_path, path_full_subgraph=path_full_subgraph, association_mode=args.association_mode, factors_path=args.factors_path, run_name= args.run_name, centroid_threshold=centroid_threshold, residues_similarity_cutoff=args.residues_similarity_cutoff, neighbor_similarity_cutoff=neighbor_similarity_cutoff, rsa_similarity_threshold=rsa_similarity_threshold)
+    # G_sub = G.associated_graph
 
     G.draw_graph(show = True)
+    # print(G.associated_graph.nodes())
 
     G.grow_subgraph_bfs()
 

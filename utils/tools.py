@@ -15,6 +15,7 @@ import logging, sys
 from copy import deepcopy
 from scipy.special import factorial
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 from utils.cutils.combinations_filter import filtered_combinations
 
 log = logging.getLogger("CRSProtein")
@@ -186,14 +187,23 @@ def generate_edges(nodes, distance_matrix, residue_maps_unique):
 
     nodes = np.ascontiguousarray(nodes, dtype=np.int64)
     distance_matrix = np.ascontiguousarray(distance_matrix, dtype=np.float64)
-    # Utilize a funcao em Cython para gerar as combinacoes e aplicar os filtros
-    filtered_edges = filtered_combinations(nodes, distance_matrix)
-    log.info(f"Filtered combinations successfully made! Found {len(filtered_edges)} valid edges.")
-  
-    edges = convert_edges_to_residues(filtered_edges, residue_maps_unique)
-    edges = [edge for edge in edges if not set(edge[0]) == set(edge[1]) and check_cross_positions(edge)]
     
-    return edges
+    log.debug(f"Shape of nodes: {nodes.shape}")
+    log.debug(f"Shape of distance_matrix: {distance_matrix.shape}")
+    # Utilize a funcao em Cython para gerar as combinacoes e aplicar os filtros
+    edges = filtered_combinations(nodes, distance_matrix)
+    
+    edges_converted = convert_edges_to_residues(edges, residue_maps_unique)
+    edges_converted_filtered = []
+    edges_filtered = []
+    for i, edge in enumerate(edges_converted):
+        if not set(edge[0]) == set(edge[1]) and check_cross_positions(edge):
+            edges_converted_filtered.append(edge)
+            edges_filtered.append(edges[i])
+    log.info(f"Filtered combinations successfully made! Found {len(edges_filtered)} valid edges.")
+    # edges = [edge for edge in edges if not set(edge[0]) == set(edge[1]) and check_cross_positions(edge)]
+    
+    return edges_converted_filtered, edges_filtered
 
 def convert_edges_to_residues(edges: List[Tuple], residue_maps_unique: Dict) -> List[Tuple]:
     """Convert the edges that contains tuple of indices to tuple of residues
@@ -309,8 +319,8 @@ def indices_graphs(graphs):
         lenght_actual = new_lenght_actual
     return ranges_graph
     
-def create_neighboor_similarity(nodes_graphs: list, ranges_graph: list, total_lenght: int, neighbors, neighbor_similarity_cutoff: float = 0.95):
-    """Create a neighboor's similarity matrix using the cosine similiraty between the vectors that represent the neighbors from each residue.
+def create_similarity_matrix(nodes_graphs: list, ranges_graph: list, total_lenght: int, residues_factors, similarity_cutoff: float = 0.95):
+    """Create a similarity matrix using the cosine similiraty between the vectors that represent the factors from each residue.
     The comparassion is made between residues from different proteins
 
     Args:
@@ -323,28 +333,28 @@ def create_neighboor_similarity(nodes_graphs: list, ranges_graph: list, total_le
     Returns:
         matrix (np.ndarray): A numpy neigboor's similarity matrix
     """
-    
+
     matrix = np.zeros((total_lenght, total_lenght))
 
     for i in range(len(nodes_graphs)):
         for j in range(i+1, len(nodes_graphs)):
-            neighborsA = neighbors[i]
-            neighborsB = neighbors[j]
+            residuesA = residues_factors[i]
+            residuesB = residues_factors[j]
 
-            similarities = np.array([cosine_similarity(neighborsA[product[0]], neighborsB[product[1]]) for product in itertools.product(neighborsA, neighborsB)])
-            similarities = np.reshape(similarities, (len(neighborsA), len(neighborsB)))
+            similarities = np.array([cosine_similarity(residuesA[product[0]], residuesB[product[1]]) for product in itertools.product(residuesA, residuesB)])
+            similarities = np.reshape(similarities, (len(residuesA), len(residuesB)))
             
             startA, endA, startB, endB = *ranges_graph[i], *ranges_graph[j]
             
             matrix[startA:endA, startB:endB] = similarities
             matrix[startB:endB, startA:endA] = similarities.T
 
-    matrix[matrix < neighbor_similarity_cutoff] = 0
-    matrix[matrix >= neighbor_similarity_cutoff] = 1
+    matrix[matrix < similarity_cutoff] = 0
+    matrix[matrix >= similarity_cutoff] = 1
     
     return matrix            
             
-def association_product(graphs: List, association_mode: str, nodes_graphs: List, contact_maps: List, residue_maps_all: List, centroid_threshold: float = 10, neighbor_similarity_cutoff: float = 0.95, rsa_similarity_threshold: float = 0.95, debug: bool = False):
+def association_product_b(graphs: List, association_mode: str, nodes_graphs: List, contact_maps: List, residue_maps_all: List, centroid_threshold: float = 10, neighbor_similarity_cutoff: float = 0.95, rsa_similarity_threshold: float = 0.95, debug: bool = False):
     """Make the associated graph through the cartesian product of graphs, using somem modifications to filter nodes and edges.
     
     Args:
@@ -435,14 +445,19 @@ def association_product(graphs: List, association_mode: str, nodes_graphs: List,
                 break
             
             block_elements.append([index for index in block_indices[i] if start <= index < end])
+            print(block_elements)
         else:
             log.debug(f"{i}/{reference_graph} Making the cartesian product")
             all_possible_nodes.extend(list(itertools.product(*block_elements)))    
             log.debug(f"{i}/{reference_graph} Cartesian product finalized")
+    
+    
 
     all_possible_nodes = [node for node in all_possible_nodes if check_multiple_chains(node, residue_maps_unique)]
-    
-    edges = generate_edges(nodes=all_possible_nodes, distance_matrix=distance_matrix, residue_maps_unique=residue_maps_unique)
+    log.debug(f"{', '.join([f'Graph {i}: {len(graphs[i])}' for i in range(len(graphs))])}")
+    log.info(f"All possible nodes: {len(all_possible_nodes)}")
+    input("Continue?")
+    edges = generate_edges(nodes=all_possible_nodes, distance_matrix=distance_matrix, residue_maps_unique=residue_maps_unique)[0]
 
     G_sub = nx.Graph()
     
@@ -464,6 +479,187 @@ def association_product(graphs: List, association_mode: str, nodes_graphs: List,
     print(f"G_sub: {G_sub}")
     return G_sub
 
+
+def create_residues_factors(graphs: List, factors_path: str):
+    
+    read_emb = pd.read_csv(factors_path)
+    residue_factors = {}
+    
+    for i in range(len(graphs)):
+        residue_factors[i] = {node: calculate_atchley_average(node, read_emb) for node in graphs[i].nodes}     
+    return residue_factors
+
+def association_product(graphs: List, association_mode: str, nodes_graphs: List, contact_maps: List, residue_maps_all: List, factors_path: Union[List, None] = None, centroid_threshold: float = 10, residues_similarity_cutoff: float = 0.95, neighbor_similarity_cutoff: float = 0.95, rsa_similarity_threshold: float = 0.95, debug: bool = False):
+    """Make the associated graph through the cartesian product of graphs, using somem modifications to filter nodes and edges.
+    
+    Args:
+        graphs (List): A list of graphs
+        association_mode (str): Association mode of edges
+        nodes_graphs (List): A list of nodes graphs
+        contact_maps (List): A list of contact maps
+        residue_maps_all (List): Full residues maps
+        centroid_threshold (float, optional): Threshold to filter big distances. Defaults to 10.
+        similarity_cutoff (float, optional): Similarity cutoff. Defaults to 0.95.
+
+    Returns:
+        nx.NetworwGraph: The associated graph
+    """
+   
+
+    total_lenght_graphs = sum([len(graph.nodes()) for graph in graphs])
+
+    log.debug(f"Total Lenght Graphs: {total_lenght_graphs}")
+    log.info("Creating filtered contact maps and full residue maps...")    
+    filtered_contact_maps, full_residue_maps = filter_reduce_maps(contact_maps=contact_maps, residue_maps=residue_maps_all, nodes_graphs=nodes_graphs, distance_threshold=centroid_threshold)
+    log.info(f"Filtered contact maps and full residue maps created with success!")
+    
+    prot_all_res = [[":".join(node.split(":")[:2]) for node in nodes_graph] for nodes_graph in nodes_graphs]
+    prot_all_res = np.array([node for sublist in prot_all_res for node in sublist])
+    
+    ranges_graph = indices_graphs(graphs)
+    
+    log.info(f"Creating the Neighbors Vector...")
+    neighbors_vec = {i: graph_message_passing(graph, 'resources/atchley_aa.csv', use_degree=False, norm_features=False) for i, graph in enumerate(graphs)}
+    log.info("Neighbors vector created with success!")
+
+    current_value = 0
+    residue_maps_unique = {}
+    
+    for residue_map in full_residue_maps:
+        residue_maps_unique.update({value + current_value: key for key, value in residue_map.items()})
+        current_value += len(residue_map)
+
+    log.info("Creating nighbors similarity matrix...")
+    neighbors_similarity = create_similarity_matrix(nodes_graphs = nodes_graphs, ranges_graph = ranges_graph, total_lenght = total_lenght_graphs, residues_factors= neighbors_vec, similarity_cutoff = neighbor_similarity_cutoff)
+    log.info("Neighbors similarity matrix created with success!")
+    
+    if association_mode == "identity":
+        
+        identity_matrix = np.equal(prot_all_res[:, np.newaxis], prot_all_res).astype(int)
+        np.fill_diagonal(identity_matrix, 0)
+        log.info("Identity: Creating associated nodes matrix...")
+        associated_nodes_matrix = np.multiply(neighbors_similarity, identity_matrix)
+        log.info("Identity: Associated nodes matrix created with success!")
+    
+    elif association_mode == "similarity":
+        log.info("Similarity: Creating associated nodes matrix...")
+        residues_factors = create_residues_factors(graphs=graphs, factors_path=factors_path)
+        similarity_matrix = create_similarity_matrix(nodes_graphs=nodes_graphs, residues_factors=residues_factors, total_lenght=total_lenght_graphs, similarity_cutoff=residues_similarity_cutoff, ranges_graph=ranges_graph)
+
+        associated_nodes_matrix = np.multiply(neighbors_similarity, similarity_matrix)
+        np.fill_diagonal(associated_nodes_matrix, 0)
+        log.info("Similarity: Associated nodes matrix created with success!")
+        
+    log.debug(f"Dimension of Associated Matrix: {associated_nodes_matrix.shape}")
+    
+    lenght_actual = 0
+    
+    distance_matrix = np.zeros((total_lenght_graphs, total_lenght_graphs))    
+    
+    for i in range(len(graphs)):
+        graph_lenght = len(graphs[i])
+        
+        new_lenght_actual = lenght_actual + graph_lenght
+        
+        associated_nodes_matrix[lenght_actual:new_lenght_actual, lenght_actual:new_lenght_actual] = 0
+        distance_matrix[lenght_actual:new_lenght_actual, lenght_actual:new_lenght_actual] = filtered_contact_maps[i]
+    
+        lenght_actual = new_lenght_actual
+        
+    reference_graph = graphs[0].nodes()
+    
+    reference_graph_indices = [*range(len(reference_graph))]
+    intermediate_edges = []
+    intermediate_graphs = []
+    for i, range_graph in enumerate(ranges_graph[1:]):
+        log.info(f"Making associated graph between reference graph and graph {i}")
+        possible_nodes = create_possible_nodes(reference_graph_indices=reference_graph_indices, associated_nodes=associated_nodes_matrix, range_graph=range_graph)
+        # possible_nodes = [node for node in possible_nodes if check_multiple_chains(node, residue_maps_unique)]
+        
+        intermediate_edges.append(generate_edges(nodes=possible_nodes, distance_matrix=distance_matrix, residue_maps_unique=residue_maps_unique))
+        intermediate_graphs.append(create_graph(intermediate_edges[i][1]))
+        print(f"Possible nodes: {len(possible_nodes)}")
+        reference_graph_indices = [next(g)[0] for _, g in itertools.groupby(intermediate_graphs[i].nodes(), key=lambda x:x[0])]
+
+    filtered_intermediate_graphs = filter_intermediate_graphs(intermediate_graphs[:-1], reference_graph_indices)
+    
+    Graph = create_graph(intermediate_edges[-1][0])
+    # final_nodes_converted = tuple(f"{residue_maps_unique[idx][0]}:{residue_maps_unique[idx][2]}:{residue_maps_unique[idx][1]}" for idx in final_nodes)
+    # all_possible_nodes = [node for node in all_possible_nodes if check_multiple_chains(node, residue_maps_unique)]
+    # log.debug(f"{', '.join([f'Graph {i}: {len(graphs[i])}' for i in range(len(graphs))])}")
+    # log.info(f"All possible nodes: {len(all_possible_nodes)}")
+    # edges = generate_edges(nodes=all_possible_nodes, distance_matrix=distance_matrix, residue_maps_unique=residue_maps_unique)
+
+
+    log.debug(f"Graph: {Graph}")
+    return Graph
+
+def filter_intermediate_graphs(graphs: list, node_list):
+    filtered_graphs = []
+
+    for graph in graphs:
+        filtered_graphs.append(nx.subgraph(graph, [node for node in graph.nodes() if node[0] in node_list]))
+    
+    return filtered_graphs  
+
+
+def create_graph(edges: List[Tuple]):
+    G_sub = nx.Graph()
+    
+    for sublist in edges:
+        node_a = tuple(sublist[0]) if isinstance(sublist[0], np.ndarray) else sublist[0]
+        node_b = tuple(sublist[1]) if isinstance(sublist[1], np.ndarray) else sublist[1] 
+        G_sub.add_edge(node_a, node_b)
+        
+
+    chain_color_map = {}
+    color_palette = plt.cm.get_cmap('tab10', 20) 
+    color_counter = 1 
+
+    if not isinstance(sublist[0], np.ndarray):
+        for nodes in G_sub.nodes:
+            chain_id = nodes[0][0] + nodes[1][0] 
+            
+            
+            if chain_id not in chain_color_map:
+                chain_color_map[chain_id] = color_palette(color_counter)[:3]  # RGB tuple
+                log.debug(f"Chain_id: {chain_id}, color: {chain_color_map[chain_id]}")
+                color_counter += 5
+
+
+            G_sub.nodes[nodes]['chain_id'] = chain_color_map[chain_id]
+    
+    G_sub.remove_nodes_from(list(nx.isolates(G_sub)))
+    
+    return G_sub
+
+def create_possible_nodes(reference_graph_indices: list, associated_nodes: np.ndarray, range_graph: Tuple):
+    all_possible_nodes = []
+    (start, end) = range_graph
+    # for i in reference_graph_indices:
+        
+    #     elements = list(np.where(associated_nodes[:, i] > 0)[0])
+        
+    #     if elements:
+    #         block_elements = [[i], elements]
+    #         print(block_elements)
+    #         all_possible_nodes.extend(list(itertools.product(*block_elements)))
+    # input("Continue?")
+    # return all_possible_nodes
+    for i in reference_graph_indices:
+        block_indices = np.where(associated_nodes[:, i] > 0)[0]
+
+        elements = [index for index in block_indices if start <= index < end]
+            
+        if elements:
+
+            block_elements = [[i], elements]
+
+            # log.debug(f"{i}/{reference_graph} Making the cartesian product")
+            all_possible_nodes.extend(list(itertools.product(*block_elements)))    
+            # log.debug(f"{i}/{reference_graph} Cartesian product finalized")
+
+    return all_possible_nodes
 def build_contact_map(pdb_file):
     
     # Step 1: Parse the PDB file

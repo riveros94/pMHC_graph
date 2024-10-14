@@ -4,9 +4,7 @@ cimport cython
 import numpy as np
 cimport numpy as np
 from libc.time cimport time
-from cython.parallel import prange
 from libc.math cimport sqrt
-from libcpp.vector cimport vector
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
@@ -24,17 +22,27 @@ cdef double compute_cv_distance(np.int64_t[:, :] nodes_view, np.int64_t i, np.in
     for k in range(N):
         idx_i = nodes_view[i, k]
         idx_j = nodes_view[j, k]
+
+        # Verifica se idx_i e idx_j estão dentro dos limites
+        if idx_i < 0 or idx_i >= distance_matrix_view.shape[0]:
+            return -1.0
+        if idx_j < 0 or idx_j >= distance_matrix_view.shape[1]:
+            return -1.0
+
         distance = distance_matrix_view[idx_i, idx_j]
         if distance <= 0:
-            return -1.0 
+            return -1.0
 
         distances_sum += distance
         distances_sq_sum += distance * distance
 
     mean_distance = distances_sum / N
+    if mean_distance == 0.0:
+        return -1.0  # Evita divisão por zero
+
     temp = (distances_sq_sum / N) - (mean_distance * mean_distance)
     if temp < 0:
-        temp = 0.0 
+        temp = 0.0
     std_distance = sqrt(temp)
     cv_distance = (std_distance / mean_distance) * 100.0
 
@@ -54,44 +62,32 @@ def filtered_combinations(np.ndarray[np.int64_t, ndim=2, mode='c'] nodes not Non
     cdef double start_time, elapsed_time
     cdef double[:, :] distance_matrix_view = distance_matrix
     cdef np.int64_t[:, :] nodes_view = nodes
-    cdef vector[long long] local_results 
-
     cdef list result = []
 
-    start_time = time(NULL) 
+    start_time = time(NULL)
 
-    with nogil:
-        for i in prange(len_nodes, schedule='dynamic'):
-            local_results.clear()  # Limpa o vector antes de usar
+    # Loop sequencial sem paralelização
+    for i in range(len_nodes):
+        for j in range(i + 1, len_nodes):
 
-            for j in range(i + 1, len_nodes):
+            # Verifica se todos os elementos de nodes_view[i, :] são diferentes de nodes_view[j, :]
+            all_diff = True
+            for k in range(N):
+                if nodes_view[i, k] == nodes_view[j, k]:
+                    all_diff = False
+                    break
 
-                # Verifica se todos os elementos de nodes_view[i, :] são diferentes de nodes_view[j, :]
-                all_diff = True
-                for k in range(N):
-                    if nodes_view[i, k] == nodes_view[j, k]:
-                        all_diff = False
-                        break
+            if all_diff:
+                # Calcula o cv_distance
+                cv_distance = compute_cv_distance(nodes_view, i, j, distance_matrix_view, N)
 
-                if all_diff:
-                    # Calcula o cv_distance usando a função separada
-                    cv_distance = compute_cv_distance(nodes_view, i, j, distance_matrix_view, N)
+                if cv_distance >= 0.0 and cv_distance < max_cv:
+                    # Adiciona os pares ao resultado
+                    result.append((nodes[i].copy(), nodes[j].copy()))
 
-                    if cv_distance >= 0.0 and cv_distance < max_cv:
-                        # Armazena os índices i, j
-                        local_results.push_back(i)
-                        local_results.push_back(j)
+        # Atualizando o progresso a cada 100 iterações
+        if i % 100 == 0:
+            elapsed_time = time(NULL) - start_time
+            print(f"Progresso: {i}/{len_nodes}, Tempo decorrido: {elapsed_time:.2f} segundos")
 
-            # Unindo os resultados locais no resultado final
-            with gil:
-                for idx in range(0, local_results.size(), 2):
-                    result.append((nodes[local_results[idx]], nodes[local_results[idx+1]]))
-
-            # Atualizando o progresso
-            if i % 100 == 0:
-                elapsed_time = time(NULL) - start_time
-                with gil:
-                    print(f"Progress: {i}/{len_nodes}, Elapsed time: {elapsed_time:.2f} seconds")
-
-    # Retorna a lista final de pares de nós
     return result

@@ -40,7 +40,7 @@ The algorithm is inspired by work on protein-protein binding sites and surface s
 
 1. Clone the repository:
     ```bash
-    git clone https://github.com/your-username/your-repo-name.git
+    git clone https://github.com/LBC-LNBio/pMHC_graph.git
     ```
 
 2. Create a Conda environment and install the required packages:
