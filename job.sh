@@ -10,7 +10,6 @@ conda activate ic_bioinfo
 
 export OMP_NUM_THREADS=1                    # Define o número de threads OpenMP
 
-# (Opcional) Exibir informações sobre as CPUs disponíveis
 echo "CPUs disponíveis: $SLURM_CPUS_ON_NODE"
 echo "Threads OpenMP: $OMP_NUM_THREADS"
 
