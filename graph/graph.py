@@ -14,11 +14,11 @@ from pathlib import Path
 from os import path
 from typing import Callable, Any, Union, Optional, List, Tuple
 from operator import itemgetter
-
+import numpy as np
 
 class AssociatedGraph:
-    def __init__(self, graphs: List[Tuple], output_path: str, path_full_subgraph: str, run_name: str, association_mode: str = "identity",  
-                 centroid_threshold: int = 10, neighbor_similarity_cutoff: float = 0.95, 
+    def __init__(self, graphs: List[Tuple], reference_graph: Union[str, int, None], output_path: str, path_full_subgraph: str, run_name: str, 
+                 association_mode: str = "identity", centroid_threshold: int = 10, neighbor_similarity_cutoff: float = 0.95, 
                  rsa_similarity_threshold: float = 0.95, residues_similarity_cutoff: float = 0.95, factors_path: Union[str, None] = None):
 
         self.graphs = graphs
@@ -30,29 +30,45 @@ class AssociatedGraph:
         self.rsa_similarity_threshold = rsa_similarity_threshold
         self.factors_path = factors_path
         self.residues_similarity_cutoff = residues_similarity_cutoff
+        self.reference_graph = reference_graph
         Path(self.output_path).mkdir(parents=True, exist_ok=True)
         self.path_full_subgraph = path_full_subgraph
         
-        self.associated_graph = self._construct_graph(graphs=self.graphs, association_mode=self.association_mode, centroid_threshold=self.centroid_threshold, residues_similarity_cutoff=self.residues_similarity_cutoff, neighbor_similarity_cutoff=self.neighbor_similarity_cutoff, rsa_similarity_threshold=self.rsa_similarity_threshold, factors_path=self.factors_path )
+        self.associated_graph = self._construct_graph(graphs=self.graphs, reference_graph=self.reference_graph, association_mode=self.association_mode, centroid_threshold=self.centroid_threshold, residues_similarity_cutoff=self.residues_similarity_cutoff, neighbor_similarity_cutoff=self.neighbor_similarity_cutoff, rsa_similarity_threshold=self.rsa_similarity_threshold, factors_path=self.factors_path )
         
     def _build_multiple_contact_map(self, graphs: List[Tuple]) -> List[Tuple]:
 
         contact_residues_map = []
         for item in graphs:
             contact_map, residue_map, residue_map_all = build_contact_map(item[1])
-            contact_residues_map.append((item[0], item[1], contact_map, residue_map, residue_map_all))
+            rsa_map = np.array(item[0].graph["dssp_df"]["rsa"])
+            contact_residues_map.append((item[0], item[1], contact_map, residue_map, residue_map_all, rsa_map))
 
         return contact_residues_map
         
-    def _gen_associated_graph(self, graphsList: List[Tuple], association_mode: str, centroid_threshold: int, neighbor_similarity_cutoff: float, rsa_similarity_threshold: float, residues_similarity_cutoff: float, factors_path: Union[str, None]):
+    def _gen_associated_graph(self, graphsList: List[Tuple], reference_graph: Union[str, int, None], association_mode: str, centroid_threshold: int, neighbor_similarity_cutoff: float, rsa_similarity_threshold: float, residues_similarity_cutoff: float, factors_path: Union[str, None]):
         
-        graphsList = sorted(graphsList, key=lambda x: len(x[0].nodes()))
+        print(reference_graph, graphsList[0][1])
+        if isinstance(reference_graph, int):
+            graphsList[0], graphsList[reference_graph] = graphsList[reference_graph], graphsList[0]
+            
+        elif isinstance(reference_graph, str):
+
+            index = next((i for i, x in enumerate(graphsList) if x[1] == reference_graph), None)
+
+            if index is not None:
+                graphsList[0], graphsList[index] = graphsList[index], graphsList[0]
+            else:
+                graphsList = sorted(graphsList, key=lambda x: len(x[0].nodes()))
+        elif reference_graph is None:
+            graphsList = sorted(graphsList, key=lambda x: len(x[0].nodes()))
         
         contact_maps = [graph[2] for graph in graphsList]
-    
+
         graphs = [graph[0] for graph in graphsList]
         residue_maps = [graph[3] for graph in graphsList]
-        residue_maps_all = [graph[4] for graph in graphsList]       
+        residue_maps_all = [graph[4] for graph in graphsList]    
+        rsa_maps = [graph[5] for graph in graphsList]   
  
         """
         def sort_key(node):
@@ -67,14 +83,14 @@ class AssociatedGraph:
         start = time()
         print(f"Vou iniciar o produto cartesiano")
         
-        M = association_product(graphs=graphs, association_mode = association_mode, factors_path=factors_path, nodes_graphs = nodes_graphs, contact_maps = contact_maps, residue_maps_all = residue_maps_all, centroid_threshold = centroid_threshold, residues_similarity_cutoff=residues_similarity_cutoff, neighbor_similarity_cutoff = neighbor_similarity_cutoff, rsa_similarity_threshold=rsa_similarity_threshold)
+        M = association_product(graphs=graphs, association_mode = association_mode, factors_path=factors_path, nodes_graphs = nodes_graphs, contact_maps = contact_maps, residue_maps_all = residue_maps_all, rsa_maps=rsa_maps, centroid_threshold = centroid_threshold, residues_similarity_cutoff=residues_similarity_cutoff, neighbor_similarity_cutoff = neighbor_similarity_cutoff, rsa_similarity_threshold=rsa_similarity_threshold)
         
         end = time()
         print(f"Tempo para produto cartesiano: {end - start}")
         
         return M
     
-    def _construct_graph(self, graphs: list, association_mode: str, centroid_threshold: int, neighbor_similarity_cutoff: float, rsa_similarity_threshold: float, residues_similarity_cutoff: float, factors_path: Union[str, None]):
+    def _construct_graph(self, graphs: list, reference_graph: Union[str, int, None],  association_mode: str, centroid_threshold: int, neighbor_similarity_cutoff: float, rsa_similarity_threshold: float, residues_similarity_cutoff: float, factors_path: Union[str, None]):
         # Create a contact map and a list with residue names order as the contact map
         # We do not need to do this, since graphein already build internally the distance matrix considering the centroid
         # This matrix can be obtained from: graph.graph["pdb_df"]
@@ -82,12 +98,9 @@ class AssociatedGraph:
         # Usually this dist_mat is not updated in related to the pdb_df after graph subsets, so it is important to double check it 
         # Instead of using the dist_mat we can build it again using compute_distmat(graph.graph["pdb_df"])
         
-        
         contact_residues_maps = self._build_multiple_contact_map(graphs)
         
-        contact_residues_maps_sorted = sorted(contact_residues_maps, key=itemgetter(1)) 
-               
-        associated_graph = self._gen_associated_graph(graphsList = contact_residues_maps_sorted, association_mode = association_mode, centroid_threshold = centroid_threshold, factors_path=factors_path, residues_similarity_cutoff=residues_similarity_cutoff, neighbor_similarity_cutoff= neighbor_similarity_cutoff, rsa_similarity_threshold = rsa_similarity_threshold)
+        associated_graph = self._gen_associated_graph(graphsList = contact_residues_maps, reference_graph= reference_graph, association_mode = association_mode, centroid_threshold = centroid_threshold, factors_path=factors_path, residues_similarity_cutoff=residues_similarity_cutoff, neighbor_similarity_cutoff= neighbor_similarity_cutoff, rsa_similarity_threshold = rsa_similarity_threshold)
 
         return associated_graph
     
