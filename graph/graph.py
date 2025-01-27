@@ -41,9 +41,10 @@ class AssociatedGraph:
 
         graphsList = []
         for item in graphs:
+            residue_depth = item[0].residue_depth
             contact_map, residue_map, residue_map_all = build_contact_map(item[1])
             rsa_map = np.array(item[0].graph["dssp_df"]["rsa"])
-            graphsList.append((item[0], item[1], contact_map, residue_map, residue_map_all, rsa_map))
+            graphsList.append((item[0], item[1], contact_map, residue_map, residue_map_all, rsa_map, residue_depth ))
 
         return graphsList
         
@@ -64,20 +65,20 @@ class AssociatedGraph:
             graphsList = sorted(graphsList, key=lambda x: len(x[0].nodes()))
         
         self.graphsList = graphsList
-        contact_maps = [graph[2] for graph in graphsList]
+        # contact_maps = [graph[2] for graph in graphsList]
 
-        graphs = [graph[0] for graph in graphsList]
-        # residue_maps = [graph[3] for graph in graphsList]
-        residue_maps_all = [graph[4] for graph in graphsList]    
-        rsa_maps = [graph[5] for graph in graphsList]   
- 
-        
-        nodes_graphs = [list(graph.nodes()) for graph in graphs]
+        # graphs = [graph[0] for graph in graphsList]
+        # # residue_maps = [graph[3] for graph in graphsList]
+        # residue_maps_all = [graph[4] for graph in graphsList]    
+        # rsa_maps = [graph[5] for graph in graphsList]
+        # residue_depths = [graph[6] for graph in graphsList]
+        # nodes_graphs = [list(graph.nodes()) for graph in graphs]
 
         start = time()
         print(f"Vou iniciar o produto cartesiano")
         
-        M = association_product(graphs=graphs, association_mode = association_mode, factors_path=factors_path, nodes_graphs = nodes_graphs, contact_maps = contact_maps, residue_maps_all = residue_maps_all, rsa_maps=rsa_maps, centroid_threshold = centroid_threshold, residues_similarity_cutoff=residues_similarity_cutoff, neighbor_similarity_cutoff = neighbor_similarity_cutoff, rsa_similarity_threshold=rsa_similarity_threshold)
+        M = association_product(graphsList=self.graphsList, association_mode = association_mode, factors_path=factors_path, centroid_threshold = centroid_threshold, residues_similarity_cutoff=residues_similarity_cutoff, neighbor_similarity_cutoff = neighbor_similarity_cutoff, rsa_similarity_threshold=rsa_similarity_threshold)
+        # M = association_product(graphs=graphs, association_mode = association_mode, factors_path=factors_path, nodes_graphs = nodes_graphs, contact_maps = contact_maps, residue_maps_all = residue_maps_all, rsa_maps=rsa_maps, centroid_threshold = centroid_threshold, residues_similarity_cutoff=residues_similarity_cutoff, neighbor_similarity_cutoff = neighbor_similarity_cutoff, rsa_similarity_threshold=rsa_similarity_threshold)
         
         end = time()
         print(f"Tempo para produto cartesiano: {end - start}")
@@ -97,6 +98,9 @@ class AssociatedGraph:
 
         return associated_graph
     
+    def add_spheres(self):
+        ...
+        
     def draw_graph(self, show = True, save = True):
         if not show and not save:
             print("You are not saving or viewing the graph. Please leave at least one of the parameters as true.")

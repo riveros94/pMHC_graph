@@ -17,8 +17,45 @@ from scipy.special import factorial
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from utils.cutils.combinations_filter import filtered_combinations
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 log = logging.getLogger("CRSProtein")
+
+def plot_rsa_depth_correlation(filtered_rsa_maps, filtered_depth_maps):
+    """
+    Plota um gráfico de correlação entre os valores de RSA e a profundidade dos resíduos.
+    
+    Args:
+        filtered_rsa_maps (List[np.ndarray]): Lista de mapas RSA filtrados.
+        filtered_depth_maps (List[np.ndarray]): Lista de mapas de profundidade filtrados.
+    """
+    # Garantir que as listas de RSA e profundidade estejam alinhadas
+    rsa_values = np.concatenate(filtered_rsa_maps)
+    depth_values = np.concatenate(filtered_depth_maps)
+
+    if len(rsa_values) != len(depth_values):
+        raise ValueError("Os tamanhos de RSA e profundidade não coincidem!")
+    
+    # Criar o scatter plot
+    plt.figure(figsize=(10, 6))
+    sns.scatterplot(x=depth_values, y=rsa_values, alpha=0.7)
+    
+    # Adicionar linha de tendência
+    sns.regplot(x=depth_values, y=rsa_values, scatter=False, color='red', ci=None)
+
+    # Configurações do gráfico
+    plt.title("Correlação entre Profundidade e RSA dos Resíduos", fontsize=14)
+    plt.xlabel("Profundidade do Resíduo", fontsize=12)
+    plt.ylabel("Valor de RSA", fontsize=12)
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.tight_layout()
+
+    # Salvar o gráfico no caminho especificado
+    plt.savefig("correlation_Virus.png", format="png", dpi=300)
+    plt.close()  # Fecha a figura para liberar memória
+
+    print(f"Gráfico salvo")
 
 def check_identity(node_pair: Tuple):
     '''
@@ -265,7 +302,7 @@ def check_multiple_chains(node: Tuple, residue_maps_unique: Dict):
     else:
         return True
 
-def filter_reduce_maps(contact_maps: List, rsa_maps: List, residue_maps: List, nodes_graphs: List, distance_threshold: float = 10) -> Tuple:
+def filter_reduce_maps(contact_maps: List, rsa_maps: List, residue_maps: List, nodes_graphs: List, depths_maps: List, distance_threshold: float = 10) -> Tuple:
     """Receive a list of contact_maps and filter all values greater than `distance_threshold`. Besides that
     Generate a unique residue map joining residues of all proteins. 
 
@@ -280,20 +317,65 @@ def filter_reduce_maps(contact_maps: List, rsa_maps: List, residue_maps: List, n
     """
     filtered_contact_maps = []
     filtered_rsa_maps = []
-    
-    for contact_map, rsa_map, residue_map, nodes in zip(contact_maps, rsa_maps, residue_maps, nodes_graphs):
-        indices = [residue_map[tuple([chain, int(res_num), res_name])]
-                        for chain, res_name, res_num in (node.split(":") for node in nodes)
-                        if tuple([chain, int(res_num), res_name]) in residue_map]
+    filtered_depth_maps = []
+    for contact_map, rsa_map, depth_map, residue_map, nodes in zip(contact_maps, rsa_maps, depths_maps, residue_maps, nodes_graphs):
+        # log.debug(f"Residue Map: {residue_map}")
+        depth_map["ResidueNumber"] = depth_map["ResidueNumber"].astype(int)
+        depth_map["Chain"] = depth_map["Chain"].astype(str)
+
+        indices = [
+            residue_map[tuple([chain, int(res_num), res_name])]
+            for chain, res_name, res_num in (node.split(":") for node in nodes)
+            if tuple([chain, int(res_num), res_name]) in residue_map
+        ]
         
+        indices_depth = [
+            tuple([int(res_num), chain])
+            for chain, res_name, res_num in (node.split(":") for node in nodes)
+            if tuple([chain, int(res_num), res_name]) in residue_map
+        ]
         
+        # log.debug(f"Indices: {indices}")
+        # log.debug(f"Indices Depth: {indices_depth}")
+
+        # Validar o alinhamento dos índices com os mapas
+        for i, idx in enumerate(indices_depth):
+            residue_in_depth_map = depth_map[
+                (depth_map["ResidueNumber"] == idx[0]) & (depth_map["Chain"] == idx[1])
+            ]
+            rsa_value = rsa_map[indices[i]] if i < len(indices) else None
+
+            # log.debug(f"Validation Index {i}: Depth Map Entry: {residue_in_depth_map}")
+            # log.debug(f"Validation Index {i}: RSA Value: {rsa_value}")
+
+            if residue_in_depth_map.empty:
+                log.warning(f"No matching residue in depth map for index {i}: {idx}")
+                # print(f"Index {i} corresponds to Residue {idx}, RSA: {rsa_value}, Depth: {depth_value}")
+
+        # Aplicar os filtros
         filtered_contact_map = contact_map[np.ix_(indices, indices)]
+        # log.debug(f"Filtered Contact Map: {filtered_contact_map}")
         filtered_contact_map[filtered_contact_map >= distance_threshold] = 0
-        filtered_contact_maps.append(filtered_contact_map)  
-        
+        filtered_contact_maps.append(filtered_contact_map)
+
         filtered_rsa_map = rsa_map[indices]
-        
         filtered_rsa_maps.append(filtered_rsa_map)
+
+        filtered_depth_map = depth_map[
+            depth_map.apply(lambda row: (row["ResidueNumber"], row["Chain"]) in indices_depth, axis=1)
+        ]
+        filtered_depth_map = filtered_depth_map.set_index(["ResidueNumber", "Chain"]).reindex(indices_depth).reset_index()
+
+        # Garantir que apenas a coluna ResidueDepth seja convertida para um array
+        filtered_depth_map_array = filtered_depth_map["ResidueDepth"].to_numpy()
+
+        filtered_depth_maps.append(filtered_depth_map_array)
+
+        # Log final para verificação da ordem
+        # log.debug(f"Filtered RSA map (Array): {filtered_rsa_map}")
+        # log.debug(f"Filtered Depth map (Array): {filtered_depth_map_array}")
+
+
     
     full_residue_maps = [
         {(chain, int(res_num), res_name): i for i, (chain, res_name, res_num) in enumerate(
@@ -302,8 +384,7 @@ def filter_reduce_maps(contact_maps: List, rsa_maps: List, residue_maps: List, n
         for sorted_nodes in nodes_graphs
     ] 
         
-    return filtered_contact_maps, filtered_rsa_maps, full_residue_maps
-
+    return filtered_contact_maps, filtered_rsa_maps, full_residue_maps, filtered_depth_maps
 def indices_graphs(graphs):
     """Make a list that contains indices that indicates the position of each protein in graph
 
@@ -502,7 +583,8 @@ def create_residues_factors(graphs: List, factors_path: str):
         residue_factors[i] = {node: calculate_atchley_average(node, read_emb) for node in graphs[i].nodes}     
     return residue_factors
 
-def association_product(graphs: List, association_mode: str, nodes_graphs: List, contact_maps: List, residue_maps_all: List, rsa_maps: List, factors_path: Union[List, None] = None, centroid_threshold: float = 10, residues_similarity_cutoff: float = 0.95, neighbor_similarity_cutoff: float = 0.95, rsa_similarity_threshold: float = 0.95, debug: bool = False):
+# def association_product(graphs: List, association_mode: str, nodes_graphs: List, contact_maps: List, residue_maps_all: List, rsa_maps: List, factors_path: Union[List, None] = None, centroid_threshold: float = 10, residues_similarity_cutoff: float = 0.95, neighbor_similarity_cutoff: float = 0.95, rsa_similarity_threshold: float = 0.95, debug: bool = False):
+def association_product(graphsList: List, association_mode: str, factors_path: Union[List, None] = None, centroid_threshold: float = 10, residues_similarity_cutoff: float = 0.95, neighbor_similarity_cutoff: float = 0.95, rsa_similarity_threshold: float = 0.95, debug: bool = True):
     """Make the associated graph through the cartesian product of graphs, using somem modifications to filter nodes and edges.
     
     Args:
@@ -518,15 +600,27 @@ def association_product(graphs: List, association_mode: str, nodes_graphs: List,
         nx.NetworwGraph: The associated graph
     """
    
+    graphs = [graph[0] for graph in graphsList]
+    contact_maps = [graph[2] for graph in graphsList]
+    # residue_maps = [graph[3] for graph in graphsList]
+    residue_maps_all = [graph[4] for graph in graphsList]    
+    rsa_maps = [graph[5] for graph in graphsList]
+    depths_maps = [graph[6] for graph in graphsList]
+    nodes_graphs = [list(graph.nodes()) for graph in graphs]
 
     total_lenght_graphs = sum([len(graph.nodes()) for graph in graphs])
 
     log.debug(f"Total Lenght Graphs: {total_lenght_graphs}")
     log.info("Creating filtered contact maps and full residue maps...")    
-    filtered_contact_maps, filtered_rsa_maps, full_residue_maps = filter_reduce_maps(contact_maps=contact_maps, rsa_maps=rsa_maps, residue_maps=residue_maps_all, nodes_graphs=nodes_graphs, distance_threshold=centroid_threshold)
+    filtered_contact_maps, filtered_rsa_maps, full_residue_maps, filtered_depth_maps= filter_reduce_maps(contact_maps=contact_maps, rsa_maps=rsa_maps, residue_maps=residue_maps_all, depths_maps=depths_maps, nodes_graphs=nodes_graphs, distance_threshold=centroid_threshold)
+
     log.info(f"Filtered contact maps and full residue maps created with success!")
     
 
+    # log.debug(f"Ploting RSA / Depth Correlation")
+    # plot_rsa_depth_correlation(filtered_rsa_maps=filtered_rsa_maps, filtered_depth_maps=filtered_depth_maps)
+
+    # input(f"Continuar?")
     prot_all_res = np.array([node.split(":")[1] for node_graph in nodes_graphs for node in node_graph])
     ranges_graph = indices_graphs(graphs)
     
@@ -548,13 +642,20 @@ def association_product(graphs: List, association_mode: str, nodes_graphs: List,
     log.info("Creating RSA similarity matrix...")
     rsa_similarity = create_similarity_matrix(nodes_graphs=nodes_graphs, ranges_graph = ranges_graph, total_lenght= total_lenght_graphs, residues_factors= filtered_rsa_maps, similarity_cutoff=rsa_similarity_threshold, mode="1d")
     log.info("RSA similarity matrix created with success!")
+
+    log.info("Creating Depth similarity matrix...")
+    depth_similarity = create_similarity_matrix(nodes_graphs=nodes_graphs, ranges_graph = ranges_graph, total_lenght= total_lenght_graphs, residues_factors= filtered_depth_maps, similarity_cutoff=rsa_similarity_threshold, mode="1d")
+    log.info("Depth similarity matrix created with success!")
+    
+
+
     
     if association_mode == "identity":
         
         identity_matrix = np.equal(prot_all_res[:, np.newaxis], prot_all_res).astype(int)
         np.fill_diagonal(identity_matrix, 0)
         log.info("Identity: Creating associated nodes matrix...")
-        associated_nodes_matrix = identity_matrix * neighbors_similarity * rsa_similarity
+        associated_nodes_matrix = identity_matrix * neighbors_similarity * rsa_similarity * depth_similarity
         log.info("Identity: Associated nodes matrix created with success!")
         log.debug(f"Dimension of Associated Matrix: {associated_nodes_matrix.shape}")
 
@@ -563,7 +664,7 @@ def association_product(graphs: List, association_mode: str, nodes_graphs: List,
         residues_factors = create_residues_factors(graphs=graphs, factors_path=factors_path)
         similarity_matrix = create_similarity_matrix(nodes_graphs=nodes_graphs, residues_factors=residues_factors, total_lenght=total_lenght_graphs, similarity_cutoff=residues_similarity_cutoff, ranges_graph=ranges_graph)
 
-        associated_nodes_matrix = similarity_matrix * neighbors_similarity * rsa_similarity
+        associated_nodes_matrix = similarity_matrix * neighbors_similarity * rsa_similarity * depth_similarity
         np.fill_diagonal(associated_nodes_matrix, 0)
         log.info("Similarity: Associated nodes matrix created with success!")
         log.debug(f"Dimension of Associated Matrix: {associated_nodes_matrix.shape}")
@@ -587,18 +688,23 @@ def association_product(graphs: List, association_mode: str, nodes_graphs: List,
     reference_graph_indices = [*range(len(reference_graph))]
     intermediate_edges = []
     intermediate_graphs = []
+    log.debug(f"Reference Graph Indices {reference_graph_indices}")
     for i, range_graph in enumerate(ranges_graph[1:]):
         log.info(f"Making associated graph between reference graph and graph {i}")
         possible_nodes = create_possible_nodes(reference_graph_indices=reference_graph_indices, associated_nodes=associated_nodes_matrix, range_graph=range_graph)
         # possible_nodes = [node for node in possible_nodes if check_multiple_chains(node, residue_maps_unique)]
-        print(f"Possible nodes: {len(possible_nodes)}")
+        log.info(f"Possible nodes: {len(possible_nodes)}")
         intermediate_edges.append(generate_edges(nodes=possible_nodes, distance_matrix=distance_matrix, residue_maps_unique=residue_maps_unique))
         intermediate_graphs.append(create_graph(intermediate_edges[i][1]))
         
         reference_graph_indices = [next(g)[0] for _, g in itertools.groupby(intermediate_graphs[i].nodes(), key=lambda x:x[0])]
+        log.debug(f"Reference Graph Indices {reference_graph_indices}")
 
+    # log.debug(f"Intermediate Graphs: {intermediate_graphs}")
     filtered_intermediate_graphs = filter_intermediate_graphs(intermediate_graphs[:-1], reference_graph_indices)
-    
+    # log.debug(f"Filtered Intermediate Graphs: {filtered_intermediate_graphs}")
+
+    # log.debug(f"Intermediate Edges -1: {intermediate_edges[-1]}")
     Graph = create_graph(intermediate_edges[-1][0])
     # final_nodes_converted = tuple(f"{residue_maps_unique[idx][0]}:{residue_maps_unique[idx][2]}:{residue_maps_unique[idx][1]}" for idx in final_nodes)
     # all_possible_nodes = [node for node in all_possible_nodes if check_multiple_chains(node, residue_maps_unique)]
@@ -628,11 +734,11 @@ def create_graph(edges: List[Tuple]):
         G_sub.add_edge(node_a, node_b)
         
 
-    chain_color_map = {}
-    color_palette = plt.cm.get_cmap('tab10', 20) 
-    color_counter = 1 
+        chain_color_map = {}
+        color_palette = plt.cm.get_cmap('tab10', 20) 
+        color_counter = 1 
 
-    if not isinstance(sublist[0], np.ndarray):
+    if not isinstance(edges[0][0], np.ndarray):
         for nodes in G_sub.nodes:
             chain_id = nodes[0][0]
             
@@ -661,19 +767,20 @@ def create_possible_nodes(reference_graph_indices: list, associated_nodes: np.nd
     #         all_possible_nodes.extend(list(itertools.product(*block_elements)))
     # input("Continue?")
     # return all_possible_nodes
+    # log.debug(f"Reference Graph Indices: {reference_graph_indices}")
+    # log.debug(f"Associated Nodes: \n{associated_nodes}")
     for i in reference_graph_indices:
         block_indices = np.where(associated_nodes[:, i] > 0)[0]
 
         elements = [index for index in block_indices if start <= index < end]
-            
+
         if elements:
 
             block_elements = [[i], elements]
-
             # log.debug(f"{i}/{reference_graph} Making the cartesian product")
             all_possible_nodes.extend(list(itertools.product(*block_elements)))    
             # log.debug(f"{i}/{reference_graph} Cartesian product finalized")
-
+    # log.debug(f"All possible nodes: {all_possible_nodes}")
     return all_possible_nodes
 def build_contact_map(pdb_file):
     
@@ -1141,7 +1248,7 @@ def graph_message_passing(graph, embedding_path, use_degree, norm_features):
 
     #multiply the weight matrix by the feature matrix
     read_emb = pd.read_csv(embedding_path)
-    feature_matrix = np.array([calculate_atchley_average(node, read_emb) for node in graph.nodes]) 
+    feature_matrix = np.array([read_emb[read_emb.AA == convert_3aa1aa(node.split(":")[1])].iloc[:,1:].values.tolist()[0] for node in graph.nodes]) 
 
     #message passing by multiplying weight matrix (former adjacency) and the feature matrix
     message_passing_m = weights_m @ feature_matrix
