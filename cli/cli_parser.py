@@ -1,0 +1,48 @@
+import argparse
+
+def none_or_float(value):
+    if value == 'None':
+        return None
+    return float(value)
+
+def parse_args():
+    """Configura e retorna os argumentos CLI."""
+    parser = argparse.ArgumentParser(description="Building common subgraphs")
+    parser.add_argument('--folder_path', type=str, default=None,
+                        help='Folder path with PDB input files.')
+    parser.add_argument('--files_name', type=str, default=None,
+                        help="PDB files separated by comma ','. If not provided, the system will ask for user to choose in menu")
+    parser.add_argument('--reference_graph', type=str, default=None,
+                        help="Reference Graph to be used.")
+    # parser.add_argument('--interface_list', type=str, default='',
+                        # help='File with a canonical list of MHC residues at the interface with TCR. No header needed for this file.')
+    parser.add_argument('--centroid_threshold', type=int, default=10,
+                        help="Distance threshold for building the molA and molB interface graphs")
+    parser.add_argument('--run_name', type=str, default='test',
+                        help='Name for storing results in the output folder')
+    parser.add_argument('--association_mode', type=str, default='identity',
+                        help='Mode for creating association nodes. Identify or similarity.')                                        
+    parser.add_argument('--output_path', type=str, default='~/',
+                        help='Path to store output results.')
+    parser.add_argument('--neighbor_similarity_cutoff', type=float, default=0.95,
+                        help="Threshold for neighbor's similarity ")
+    parser.add_argument('--residues_similarity_cutoff', type=float, default=0.95,
+                        help="Threshold for residue's similarity")
+    parser.add_argument('--factors_path', type=str, default=None,
+                        help="Factors for calculating the residue similarity ")
+    parser.add_argument('--rsa_filter', type=none_or_float, default=0.1,
+                        help="Threshold for filter residues by RSA")
+    parser.add_argument('--depth_similarity_threshold', type=float, default=0.95,
+                        help="Threshold for make an associate graph using Depth similarity")
+    parser.add_argument('--rsa_similarity_threshold', type=float, default=0.95,
+                        help="Threshold for make an associate graph using RSA similarity")
+    parser.add_argument('--residues_lists', type=str, default=None,
+                        help="Path to Json file which contains the pdb residues")
+    parser.add_argument('--serd_config', type=str, default=None,
+                        help="Path to Json file which contains the SERD configuration" )
+    parser.add_argument('--angle_diff', type=float, default=20.0,
+                        help="Max angle difference to filter association graph's nodes")
+    parser.add_argument('--debug', type=bool, default=False,
+                        help="Activate debug mode")
+
+    return parser.parse_args()

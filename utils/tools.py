@@ -17,6 +17,7 @@ from scipy.special import factorial
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from utils.cutils.combinations_filter import filtered_combinations
+from classes.classes import StructureSERD
 import matplotlib.pyplot as plt
 import seaborn as sns
 import networkx as nx
@@ -24,40 +25,111 @@ from itertools import combinations
 
 log = logging.getLogger("CRSProtein")
 
-def plot_rsa_depth_correlation(filtered_rsa_maps, filtered_depth_maps):
+def save_pdb_with_spheres(atomic_data, selected_residues_data, pdb_filename):
     """
-    Plota um gráfico de correlação entre os valores de RSA e a profundidade dos resíduos.
-    
-    Args:
-        filtered_rsa_maps (List[np.ndarray]): Lista de mapas RSA filtrados.
-        filtered_depth_maps (List[np.ndarray]): Lista de mapas de profundidade filtrados.
+    Salva o arquivo PDB com esferas para os resíduos selecionados.
+
+    Parameters
+    ----------
+    atomic_data : numpy.ndarray
+        Dados atômicos da estrutura.
+    selected_residues_data : list
+        Lista com os dados dos resíduos selecionados, incluindo coordenadas e profundidade.
+    pdb_filename : str
+        Nome do arquivo PDB de saída.
     """
-    # Garantir que as listas de RSA e profundidade estejam alinhadas
-    rsa_values = np.concatenate(filtered_rsa_maps)
-    depth_values = np.concatenate(filtered_depth_maps)
 
-    if len(rsa_values) != len(depth_values):
-        raise ValueError("Os tamanhos de RSA e profundidade não coincidem!")
     
-    # Criar o scatter plot
-    plt.figure(figsize=(10, 6))
-    sns.scatterplot(x=depth_values, y=rsa_values, alpha=0.7)
-    
-    # Adicionar linha de tendência
-    sns.regplot(x=depth_values, y=rsa_values, scatter=False, color='red', ci=None)
+    with open(pdb_filename, 'w') as f:
+        # Adiciona os átomos originais
+        for row in atomic_data:
+            atom_line = "ATOM  {:5d}  {:<4} {:<3} {:<1} {:>4} {:>8.3f}{:>8.3f}{:>8.3f}{:>6.2f}{:>6.2f}\n".format(
+                int(row[0]), row[3], row[2], row[1], int(row[4]), row[5], row[6], row[7], row[8], row[9]
+            )
+            f.write(atom_line)
+        
+        # Adiciona as esferas para os resíduos selecionados
+        for residue in selected_residues_data:
+            residue_number = residue["ResidueNumber"]
+            chain = residue["Chain"]
+            coordinates = residue["Coordinates"]
+            radius = 1.5  # Definindo um raio para a esfera
 
-    # Configurações do gráfico
-    plt.title("Correlação entre Profundidade e RSA dos Resíduos", fontsize=14)
-    plt.xlabel("Profundidade do Resíduo", fontsize=12)
-    plt.ylabel("Valor de RSA", fontsize=12)
-    plt.grid(True, linestyle='--', alpha=0.6)
-    plt.tight_layout()
+            sphere_line = "HETATM{:5d}  SPC {:<3} {:<1} {:>4}   {:>8.3f}{:>8.3f}{:>8.3f}  1.00  0.00           SPH\n".format(
+                residue_number * 100, "SPC", chain, residue_number, coordinates[0], coordinates[1], coordinates[2]
+            )
+            f.write(sphere_line)
 
-    # Salvar o gráfico no caminho especificado
-    plt.savefig("correlation_Virus.png", format="png", dpi=300)
-    plt.close()  # Fecha a figura para liberar memória
+    print(f"PDB com esferas salvo em {pdb_filename}")
 
-    print(f"Gráfico salvo")
+def select_residues_within_range(structureSERD: StructureSERD, range_size=3):
+    """
+    Seleciona resíduos com numeração próxima ao resíduo selecionado.
+
+    Parameters
+    ----------
+    structure : Structure
+        Instância da classe Structure contendo dados atômicos e de superfície.
+    range_size : int, optional
+        O intervalo de numeração de resíduos a ser considerado ao redor do resíduo selecionado, por padrão 3.
+
+    Returns
+    -------
+    list
+        Lista de dados de resíduos selecionados com numeração próxima.
+    """
+    # Calcula a profundidade dos resíduos
+    residue_depth = StructureSERD.residue_depth()
+
+    # Converte ResidueNumber para inteiro, se necessário
+    residue_depth["ResidueNumber"] = residue_depth["ResidueNumber"].astype(int)
+
+    # Seleciona um resíduo aleatório
+    selected_residue = residue_depth.sample(1).iloc[0]
+    residue_number = selected_residue["ResidueNumber"]
+    chain = selected_residue["Chain"]
+
+    # Seleciona resíduos com numeração próxima
+    nearby_residues = residue_depth[
+        (residue_depth["ResidueNumber"] >= residue_number - range_size)
+        & (residue_depth["ResidueNumber"] <= residue_number + range_size)
+        & (residue_depth["Chain"] == chain)
+    ]
+
+    # Obtém as coordenadas dos resíduos selecionados
+    atomic_data = StructureSERD.atomic
+    selected_residues_data = []
+
+    print("Resíduos selecionados e suas profundidades:")
+
+    for _, residue in nearby_residues.iterrows():
+        residue_number = int(residue["ResidueNumber"])
+        chain = residue["Chain"]
+
+        # Usando numpy para garantir a comparação correta de arrays
+        matching_atoms = atomic_data[
+            (atomic_data[:, 0] == residue_number) & (atomic_data[:, 1] == chain)
+        ]
+
+        if matching_atoms.shape[0] == 0:
+            continue  # Se não encontrar o resíduo, ignora
+
+        residue_coords = matching_atoms[:, 4:7].astype(float)
+
+        # Adiciona os dados do resíduo à lista
+        selected_residues_data.append({
+            "ResidueNumber": residue_number,
+            "Chain": chain,
+            "ResidueName": residue["ResidueName"],
+            "Coordinates": residue_coords.mean(axis=0).tolist(),  # Usando a média das coordenadas dos átomos
+            "ResidueDepth": residue["ResidueDepth"]
+        })
+
+        # Imprime o número do resíduo e a profundidade
+        print(f"Resíduo: {residue_number} | Profundidade: {residue['ResidueDepth']}")
+
+    return selected_residues_data
+
 
 def check_identity(node_pair: Tuple):
     '''
@@ -267,7 +339,7 @@ def convert_edges_to_residues(edges: List[Tuple], residue_maps_unique: Dict) -> 
             edges_indices.append(edge)
             converted_edges.append((converted_node1, converted_node2))
         else:
-            print(f'Invalid edge: {edge}, {converted_node1}:{converted_node2}')
+            log.debug(f'Invalid edge: {edge}, {converted_node1}:{converted_node2}')
     return edges_indices, converted_edges
 
 def convert_residues_to_indices(residue_edges: List[Tuple[Tuple, Tuple]], residue_maps_unique: Dict) -> List[Tuple[Tuple, Tuple]]:
@@ -470,8 +542,7 @@ def create_residues_factors(graphs: List, factors_path: str):
         residue_factors[i] = {node: calculate_atchley_average(node, read_emb) for node in graphs[i].nodes}     
     return residue_factors
 
-# def association_product(graphs: List, association_mode: str, nodes_graphs: List, contact_maps: List, residue_maps_all: List, rsa_maps: List, factors_path: Union[List, None] = None, centroid_threshold: float = 10, residues_similarity_cutoff: float = 0.95, neighbor_similarity_cutoff: float = 0.95, rsa_similarity_threshold: float = 0.95, debug: bool = False):
-def association_product(graphsList: List, association_mode: str, factors_path: Union[List, None] = None, centroid_threshold: float = 10, residues_similarity_cutoff: float = 0.90, neighbor_similarity_cutoff: float = 0.90, rsa_similarity_threshold: float = 0.90, depth_similarity_threshold: float = 0.90, angle_diff: float = 20, debug: bool = True):
+def association_product(associated_graph_object, graphsList: List, association_mode: str, factors_path: Union[List, None] = None, centroid_threshold: float = 10, residues_similarity_cutoff: float = 0.90, neighbor_similarity_cutoff: float = 0.90, rsa_similarity_threshold: float = 0.90, depth_similarity_threshold: float = 0.90, angle_diff: float = 20, debug: bool = True):
     """Make the associated graph through the cartesian product of graphs, using somem modifications to filter nodes and edges.
     
     Args:
@@ -500,9 +571,8 @@ def association_product(graphsList: List, association_mode: str, factors_path: U
     log.debug(f"Total Lenght Graphs: {total_lenght_graphs}")
     log.info("Creating filtered contact maps and full residue maps...")    
     filtered_contact_maps, filtered_rsa_maps, full_residue_maps, filtered_depth_maps= filter_reduce_maps(contact_maps=contact_maps, rsa_maps=rsa_maps, residue_maps=residue_maps_all, depths_maps=depths_maps, nodes_graphs=nodes_graphs, distance_threshold=centroid_threshold)
-
     log.info(f"Filtered contact maps and full residue maps created with success!")
-    
+
 
     # log.debug(f"Ploting RSA / Depth Correlation")
     # plot_rsa_depth_correlation(filtered_rsa_maps=filtered_rsa_maps, filtered_depth_maps=filtered_depth_maps)
@@ -512,7 +582,9 @@ def association_product(graphsList: List, association_mode: str, factors_path: U
     ranges_graph = indices_graphs(graphs)
     
     log.info(f"Creating the Neighbors Vector...")
-    neighbors_vec = {i: graph_message_passing(graph, 'resources/atchley_aa.csv', use_degree=False, norm_features=False) for i, graph in enumerate(graphs)}
+    neighbors_vec = {i: graph_message_passing(graph, 'resources/atchley_aa.csv', 
+                        use_degree=False, 
+                        norm_features=False) for i, graph in enumerate(graphs)}
     log.info("Neighbors vector created with success!")
 
     current_value = 0
@@ -521,6 +593,7 @@ def association_product(graphsList: List, association_mode: str, factors_path: U
     for residue_map in full_residue_maps:
         residue_maps_unique.update({value + current_value: key for key, value in residue_map.items()})
         current_value += len(residue_map)
+
 
     log.info("Creating neighbors similarity matrix...")
     neighbors_similarity = create_similarity_matrix(nodes_graphs = nodes_graphs, ranges_graph = ranges_graph, total_lenght = total_lenght_graphs, residues_factors= neighbors_vec, similarity_cutoff = neighbor_similarity_cutoff)
@@ -577,14 +650,25 @@ def association_product(graphsList: List, association_mode: str, factors_path: U
         log.info(f"Making associated graph between reference graph and graph {i}")
         possible_nodes = create_possible_nodes(reference_graph_indices=reference_graph_indices, associated_nodes=associated_nodes_matrix, range_graph=range_graph)
         possible_nodes = [node for node in possible_nodes if check_multiple_chains(node, residue_maps_unique)]
-        log.info(f"Possible nodes: {len(possible_nodes)}")
+
+        if len(possible_nodes) < 1:
+            log.info("There aren't valid association nodes")
+            return None
+        else:
+            log.info(f"Possible nodes: {len(possible_nodes)}")
+
         intermediate_edges.append(generate_edges(nodes=possible_nodes, distance_matrix=distance_matrix, residue_maps_unique=residue_maps_unique, graphs=[graphs[0], graphs[i+1]], angle_diff=angle_diff))
         intermediate_graph = create_graph(intermediate_edges[i][1])
         intermediate_graphs.append(intermediate_graph)
 
+        if intermediate_graph is None:
+            log.info(f"There aren't valid edges in association graph.")
+            return None
         
         reference_graph_indices = [next(g)[0] for _, g in itertools.groupby(intermediate_graphs[i].nodes(), key=lambda x:x[0])]
         log.debug(f"Reference Graph Indices {reference_graph_indices}")
+
+
 
     # log.debug(f"Intermediate Graphs: {intermediate_graphs}")
     # filtered_intermediate_graphs = filter_intermediate_graphs(intermediate_graphs[:-1], reference_graph_indices)
@@ -596,6 +680,36 @@ def association_product(graphsList: List, association_mode: str, factors_path: U
     # Graph.remove_nodes_from([node for node in Graph.nodes if node not in nodes_filtered])
 
     # log.debug(f"Nodes_filtered: {nodes_filtered}")
+
+    attributes = {
+        'contact_maps': contact_maps,
+        'residue_maps_all': residue_maps_all,
+        'rsa_maps': rsa_maps,
+        'depths_maps': depths_maps,
+        'nodes_graph': nodes_graphs,
+        'neighbors_vec': neighbors_vec,
+        'residue_maps_unique': residue_maps_unique,
+        'filtered_contact_maps': filtered_contact_maps,
+        'filtered_rsa_maps': filtered_rsa_maps,
+        'full_residue_maps': full_residue_maps,
+        'filtered_depth_maps': filtered_depth_maps,
+        'neighbors_similarity': neighbors_similarity,
+        'rsa_similarity': rsa_similarity,
+        'depth_similarity': depth_similarity,
+        'associated_nodes_matrix': associated_nodes_matrix,
+        'distance_matrix': distance_matrix,
+        'identity_matrix': identity_matrix if association_mode == "identity" else None,
+        'similarity_matrix': similarity_matrix if association_mode == "similarity" else None,
+        'possible_nodes': possible_nodes,
+        'intermediate_graphs': intermediate_graphs,
+        'intermediate_edges': intermediate_edges
+    }
+
+    # Atribuindo os atributos ao objeto de forma dinâmica
+    for attr_name, value in attributes.items():
+        if value is not None:  # Evitar salvar valores None
+            setattr(associated_graph_object, attr_name, value)
+
     return Graph
 
 def filter_intermediate_graphs(graphs: list, node_list):
@@ -612,7 +726,8 @@ def create_graph(edges: List[Tuple]):
     
 
     if len(edges) < 1:
-        return log.info(f"Edges list empty: {edges}")
+        log.info(f"Edges list empty: {edges}")
+        return None
     for sublist in edges:
         node_a = tuple(sublist[0]) if isinstance(sublist[0], np.ndarray) else sublist[0]
         node_b = tuple(sublist[1]) if isinstance(sublist[1], np.ndarray) else sublist[1] 
@@ -1267,3 +1382,5 @@ def filter_nodes_angle(G: nx.Graph, graphs: List[nx.Graph], angle_diff: float):
     filtered_nodes_ang = [key for key, values in ang_node_dict.items() if all(value < angle_diff for value in values)]
 
     return filtered_nodes_ang
+
+
