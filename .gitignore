@@ -1,1 +1,5 @@
 *.out
+*.pyc
+*.pdb
+*.png
+__pycache__/

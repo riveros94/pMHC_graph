@@ -1383,4 +1383,3 @@ def filter_nodes_angle(G: nx.Graph, graphs: List[nx.Graph], angle_diff: float):
 
     return filtered_nodes_ang
 
-

@@ -75,6 +75,17 @@ def main():
     except Exception as e: 
         log.error(f"I wasn't able to grow subgraphs with bfs. Error message:\n{e}")
 
+    graph_data = {
+        "nodes": [str(node) for node in G.associated_graph.nodes],  # Convertendo nós para strings
+        "edges": [(str(u), str(v)) for u, v in G.associated_graph.edges],  # Convertendo arestas para strings
+        "neighbors": {str(node): [str(neighbor) for neighbor in G.associated_graph.neighbors(node)] for node in G.associated_graph.nodes}  # Convertendo vizinhos para strings
+    }
+
+
+    # Salvando o dicionário como JSON
+    with open(path.join(args.output_path, f"graph_{args.run_name}.json"), "w") as f:
+        json.dump(graph_data, f, indent=4)
+
 if __name__ == "__main__":
 
     # Verify the number of threads OpenMP
