@@ -46,6 +46,13 @@ def main():
     log = logging.getLogger("CRSProtein")
     log.setLevel(logging.DEBUG if args.debug else logging.INFO)
 
+    checks = {
+        "depth": args.check_depth,
+        "rsa": args.check_rsa,
+        "angles": args.check_angles,
+        "neighbors": args.check_neighbors
+    }
+
     graphs, reference_graph = create_graphs(args)
 
     G = AssociatedGraph(
@@ -62,6 +69,7 @@ def main():
         rsa_similarity_threshold=args.rsa_similarity_threshold,
         depth_similarity_threshold=args.depth_similarity_threshold,
         angle_diff=args.angle_diff,
+        checks=checks
     )
 
     if G.associated_graph is None:

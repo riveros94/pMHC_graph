@@ -42,6 +42,14 @@ def parse_args():
                         help="Path to Json file which contains the SERD configuration" )
     parser.add_argument('--angle_diff', type=float, default=20.0,
                         help="Max angle difference to filter association graph's nodes")
+    parser.add_argument('--check_angles', type=bool, default=True,
+                        help="Check angles after make the final associated graph")
+    parser.add_argument('--check_depth', type=bool, default=True,
+                        help="Check depth similarity")
+    parser.add_argument('--check_rsa', type=bool, default=True,
+                        help="Check rsa similarity")
+    parser.add_argument('--check_neighboors', type=bool, default=True,
+                        help="Check neighbors similarity")    
     parser.add_argument('--debug', type=bool, default=False,
                         help="Activate debug mode")
 

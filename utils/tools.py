@@ -252,7 +252,7 @@ def compute_atom_distance(pdb_file, atom_name1, chain_id1, position1, atom_name2
     return distance
 
 
-def generate_edges(nodes, distance_matrix, residue_maps_unique, graphs, angle_diff):
+def generate_edges(nodes, distance_matrix, residue_maps_unique, graphs, angle_diff, check_angles):
     """Make edges between associated nodes using dista
     nce_matrix criteria and a filter of cross positions.
     The edges are converted from indices associated nodes to residues associated nodes
@@ -292,14 +292,12 @@ def generate_edges(nodes, distance_matrix, residue_maps_unique, graphs, angle_di
             print(f"I found edge duplicated: {edge_residue}")
         map_residue_edge[edge_residue] = edge_index
 
-    # Criar grafo temporário para filtrar ângulos
     temp_graph = create_graph(edges_residues)
 
-    # Aplicar a filtragem de ângulos
-    nodes_filtered_residues = filter_nodes_angle(G=temp_graph, graphs=graphs, angle_diff=angle_diff)
-    temp_graph.remove_nodes_from([node for node in temp_graph.nodes if node not in nodes_filtered_residues])
+    if check_angles:
+        nodes_filtered_residues = filter_nodes_angle(G=temp_graph, graphs=graphs, angle_diff=angle_diff)
+        temp_graph.remove_nodes_from([node for node in temp_graph.nodes if node not in nodes_filtered_residues])
 
-    # ** Extrair as edges restantes no grafo após a remoção dos nós **
     edges_filtered_residues = list(temp_graph.edges())
     # log.debug(f"map_residue_edge: {map_residue_edge.keys()}")
     # log.debug(f"Filtered edges: {edges_filtered_residues}")
@@ -542,7 +540,7 @@ def create_residues_factors(graphs: List, factors_path: str):
         residue_factors[i] = {node: calculate_atchley_average(node, read_emb) for node in graphs[i].nodes}     
     return residue_factors
 
-def association_product(associated_graph_object, graphsList: List, association_mode: str, factors_path: Union[List, None] = None, centroid_threshold: float = 10, residues_similarity_cutoff: float = 0.90, neighbor_similarity_cutoff: float = 0.90, rsa_similarity_threshold: float = 0.90, depth_similarity_threshold: float = 0.90, angle_diff: float = 20, debug: bool = True):
+def association_product(associated_graph_object, graphsList: List, association_mode: str, factors_path: Union[List, None] = None, centroid_threshold: float = 10, residues_similarity_cutoff: float = 0.90, neighbor_similarity_cutoff: float = 0.90, rsa_similarity_threshold: float = 0.90, depth_similarity_threshold: float = 0.90, angle_diff: float = 20, checks: Dict = {}, debug: bool = True):
     """Make the associated graph through the cartesian product of graphs, using somem modifications to filter nodes and edges.
     
     Args:
@@ -573,19 +571,15 @@ def association_product(associated_graph_object, graphsList: List, association_m
     filtered_contact_maps, filtered_rsa_maps, full_residue_maps, filtered_depth_maps= filter_reduce_maps(contact_maps=contact_maps, rsa_maps=rsa_maps, residue_maps=residue_maps_all, depths_maps=depths_maps, nodes_graphs=nodes_graphs, distance_threshold=centroid_threshold)
     log.info(f"Filtered contact maps and full residue maps created with success!")
 
-
-    # log.debug(f"Ploting RSA / Depth Correlation")
-    # plot_rsa_depth_correlation(filtered_rsa_maps=filtered_rsa_maps, filtered_depth_maps=filtered_depth_maps)
-
-    # input(f"Continuar?")
     prot_all_res = np.array([node.split(":")[1] for node_graph in nodes_graphs for node in node_graph])
     ranges_graph = indices_graphs(graphs)
     
-    log.info(f"Creating the Neighbors Vector...")
-    neighbors_vec = {i: graph_message_passing(graph, 'resources/atchley_aa.csv', 
-                        use_degree=False, 
-                        norm_features=False) for i, graph in enumerate(graphs)}
-    log.info("Neighbors vector created with success!")
+    if checks["neighbors"]:
+        log.info(f"Creating the Neighbors Vector...")
+        neighbors_vec = {i: graph_message_passing(graph, 'resources/atchley_aa.csv', 
+                            use_degree=False, 
+                            norm_features=False) for i, graph in enumerate(graphs)}
+        log.info("Neighbors vector created with success!")
 
     current_value = 0
     residue_maps_unique = {}
@@ -594,25 +588,32 @@ def association_product(associated_graph_object, graphsList: List, association_m
         residue_maps_unique.update({value + current_value: key for key, value in residue_map.items()})
         current_value += len(residue_map)
 
-
-    log.info("Creating neighbors similarity matrix...")
-    neighbors_similarity = create_similarity_matrix(nodes_graphs = nodes_graphs, ranges_graph = ranges_graph, total_lenght = total_lenght_graphs, residues_factors= neighbors_vec, similarity_cutoff = neighbor_similarity_cutoff)
-    log.info("Neighbors similarity matrix created with success!")
+    if checks["neighbors"]:
+        log.info("Creating neighbors similarity matrix...")
+        neighbors_similarity = create_similarity_matrix(nodes_graphs = nodes_graphs, ranges_graph = ranges_graph, total_lenght = total_lenght_graphs, residues_factors= neighbors_vec, similarity_cutoff = neighbor_similarity_cutoff)
+        log.info("Neighbors similarity matrix created with success!")
     
-    log.info("Creating RSA similarity matrix...")
-    rsa_similarity = create_similarity_matrix(nodes_graphs=nodes_graphs, ranges_graph = ranges_graph, total_lenght= total_lenght_graphs, residues_factors= filtered_rsa_maps, similarity_cutoff=rsa_similarity_threshold, mode="1d")
-    log.info("RSA similarity matrix created with success!")
+    if checks["rsa"]:
+        log.info("Creating RSA similarity matrix...")
+        rsa_similarity = create_similarity_matrix(nodes_graphs=nodes_graphs, ranges_graph = ranges_graph, total_lenght= total_lenght_graphs, residues_factors= filtered_rsa_maps, similarity_cutoff=rsa_similarity_threshold, mode="1d")
+        log.info("RSA similarity matrix created with success!")
 
-    log.info("Creating Depth similarity matrix...")
-    depth_similarity = create_similarity_matrix(nodes_graphs=nodes_graphs, ranges_graph = ranges_graph, total_lenght= total_lenght_graphs, residues_factors= filtered_depth_maps, similarity_cutoff=depth_similarity_threshold, mode="1d")
-    log.info("Depth similarity matrix created with success!")
+    if checks["depth"]:
+        log.info("Creating Depth similarity matrix...")
+        depth_similarity = create_similarity_matrix(nodes_graphs=nodes_graphs, ranges_graph = ranges_graph, total_lenght= total_lenght_graphs, residues_factors= filtered_depth_maps, similarity_cutoff=depth_similarity_threshold, mode="1d")
+        log.info("Depth similarity matrix created with success!")
     
     if association_mode == "identity":
         
-        identity_matrix = np.equal(prot_all_res[:, np.newaxis], prot_all_res).astype(int)
+        identity_matrix = np.equal(prot_all_res[:, np.newaxis], prot_all_res).astype(float)
         np.fill_diagonal(identity_matrix, 0)
         log.info("Identity: Creating associated nodes matrix...")
-        associated_nodes_matrix = identity_matrix * neighbors_similarity * rsa_similarity * depth_similarity
+
+        associated_nodes_matrix = identity_matrix
+        if checks["neighbors"]: associated_nodes_matrix *= neighbors_similarity 
+        if checks["rsa"]: associated_nodes_matrix *= rsa_similarity 
+        if checks["depth"]: associated_nodes_matrix *= depth_similarity
+
         log.info("Identity: Associated nodes matrix created with success!")
         log.debug(f"Dimension of Associated Matrix: {associated_nodes_matrix.shape}")
 
@@ -621,7 +622,11 @@ def association_product(associated_graph_object, graphsList: List, association_m
         residues_factors = create_residues_factors(graphs=graphs, factors_path=factors_path)
         similarity_matrix = create_similarity_matrix(nodes_graphs=nodes_graphs, residues_factors=residues_factors, total_lenght=total_lenght_graphs, similarity_cutoff=residues_similarity_cutoff, ranges_graph=ranges_graph)
 
-        associated_nodes_matrix = similarity_matrix * neighbors_similarity * rsa_similarity * depth_similarity
+        associated_nodes_matrix = similarity_matrix
+        if checks["neighbors"]: associated_nodes_matrix *= neighbors_similarity 
+        if checks["rsa"]: associated_nodes_matrix *= rsa_similarity 
+        if checks["depth"]: associated_nodes_matrix *= depth_similarity
+
         np.fill_diagonal(associated_nodes_matrix, 0)
         log.info("Similarity: Associated nodes matrix created with success!")
         log.debug(f"Dimension of Associated Matrix: {associated_nodes_matrix.shape}")
@@ -646,40 +651,42 @@ def association_product(associated_graph_object, graphsList: List, association_m
     intermediate_edges = []
     intermediate_graphs = []
     log.debug(f"Reference Graph Indices {reference_graph_indices}")
+
+    Graph = None
+
     for i, range_graph in enumerate(ranges_graph[1:]):
         log.info(f"Making associated graph between reference graph and graph {i}")
         possible_nodes = create_possible_nodes(reference_graph_indices=reference_graph_indices, associated_nodes=associated_nodes_matrix, range_graph=range_graph)
-        possible_nodes = [node for node in possible_nodes if check_multiple_chains(node, residue_maps_unique)]
+        # possible_nodes = [node for node in possible_nodes if check_multiple_chains(node, residue_maps_unique)]
 
         if len(possible_nodes) < 1:
             log.info("There aren't valid association nodes")
-            return None
+            break
         else:
             log.info(f"Possible nodes: {len(possible_nodes)}")
 
-        intermediate_edges.append(generate_edges(nodes=possible_nodes, distance_matrix=distance_matrix, residue_maps_unique=residue_maps_unique, graphs=[graphs[0], graphs[i+1]], angle_diff=angle_diff))
+        intermediate_edges.append(generate_edges(nodes=possible_nodes, distance_matrix=distance_matrix, residue_maps_unique=residue_maps_unique, graphs=[graphs[0], graphs[i+1]], angle_diff=angle_diff, check_angles=checks["angles"]))
         intermediate_graph = create_graph(intermediate_edges[i][1])
         intermediate_graphs.append(intermediate_graph)
 
         if intermediate_graph is None:
             log.info(f"There aren't valid edges in association graph.")
-            return None
+            break
         
         reference_graph_indices = [next(g)[0] for _, g in itertools.groupby(intermediate_graphs[i].nodes(), key=lambda x:x[0])]
         log.debug(f"Reference Graph Indices {reference_graph_indices}")
 
+    else:
+        # log.debug(f"Intermediate Graphs: {intermediate_graphs}")
+        # filtered_intermediate_graphs = filter_intermediate_graphs(intermediate_graphs[:-1], reference_graph_indices)
+        # log.debug(f"Filtered Intermediate Graphs: {filtered_intermediate_graphs}")
 
+        # log.debug(f"Intermediate Edges -1: {intermediate_edges[-1]}")
+        Graph = create_graph(intermediate_edges[-1][0])
+        # nodes_filtered = filter_nodes_angle(G = Graph, graphs=[graphs[0], graphs[-1]])
+        # Graph.remove_nodes_from([node for node in Graph.nodes if node not in nodes_filtered])
 
-    # log.debug(f"Intermediate Graphs: {intermediate_graphs}")
-    # filtered_intermediate_graphs = filter_intermediate_graphs(intermediate_graphs[:-1], reference_graph_indices)
-    # log.debug(f"Filtered Intermediate Graphs: {filtered_intermediate_graphs}")
-
-    # log.debug(f"Intermediate Edges -1: {intermediate_edges[-1]}")
-    Graph = create_graph(intermediate_edges[-1][0])
-    # nodes_filtered = filter_nodes_angle(G = Graph, graphs=[graphs[0], graphs[-1]])
-    # Graph.remove_nodes_from([node for node in Graph.nodes if node not in nodes_filtered])
-
-    # log.debug(f"Nodes_filtered: {nodes_filtered}")
+        # log.debug(f"Nodes_filtered: {nodes_filtered}")
 
     attributes = {
         'contact_maps': contact_maps,
@@ -704,11 +711,15 @@ def association_product(associated_graph_object, graphsList: List, association_m
         'intermediate_graphs': intermediate_graphs,
         'intermediate_edges': intermediate_edges
     }
+    
 
+    log.debug(f"I'll update the attributes now")
     # Atribuindo os atributos ao objeto de forma dinâmica
     for attr_name, value in attributes.items():
         if value is not None:  # Evitar salvar valores None
             setattr(associated_graph_object, attr_name, value)
+            log.debug(f"Atributo {attr_name} atualizado para: {getattr(associated_graph_object, attr_name, 'Não encontrado')}")
+
 
     return Graph
 
@@ -1358,7 +1369,6 @@ def filter_nodes_angle(G: nx.Graph, graphs: List[nx.Graph], angle_diff: float):
                 for k, graph in enumerate(graphs):
                     n1, n2 = neighbors[i][k], neighbors[j][k]  # Pega os nós correspondentes no grafo k
                     
-                    # log.debug(f"Node {k}: {node[k]}")
                     # Obtém as coordenadas do nó e dos vizinhos
                     coord_node = get_coords_xyz(node[k], graph)
                     coord_n1 = get_coords_xyz(n1, graph)
@@ -1368,18 +1378,27 @@ def filter_nodes_angle(G: nx.Graph, graphs: List[nx.Graph], angle_diff: float):
                     v1 = coord_n1 - coord_node
                     v2 = coord_n2 - coord_node
 
-                    # Calcula o ângulo e armazena
                     angle = angle_between_vectors(v1, v2)
                     angles.append(angle)
 
-                # Calcula a diferença máxima entre os ângulos de todos os pares de grafos
                 for angle1, angle2 in combinations(angles, 2):
                     ang_diffs.append(abs(angle1 - angle2))
 
         ang_node_dict[node] = ang_diffs
 
-    # Filtragem dos nós com todas as diferenças de ângulo abaixo de 20°
-    filtered_nodes_ang = [key for key, values in ang_node_dict.items() if all(value < angle_diff for value in values)]
+    filtered_nodes_ang = [
+        key for key, values in ang_node_dict.items() if all(value < angle_diff for value in values)
+    ]
+
+    non_compliant_nodes = [
+        key for key, values in ang_node_dict.items() if any(value >= angle_diff for value in values)
+    ]
+
+    non_compliant_nodes_sorted = sorted(non_compliant_nodes, key=lambda n: len(G[n]), reverse=True)
+    selected_nodes = non_compliant_nodes_sorted[:3]
+
+    for node in selected_nodes:
+        neighbors = list(G.neighbors(node))
+        log.debug(f"Nó que NÃO passou: {node} - Vizinhos: {neighbors}")
 
     return filtered_nodes_ang
-
