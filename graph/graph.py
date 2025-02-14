@@ -104,7 +104,8 @@ class AssociatedGraph:
                  rsa_similarity_threshold: float = 0.95, 
                  depth_similarity_threshold: float = 0.95, 
                  residues_similarity_cutoff: float = 0.95, 
-                 angle_diff: float = 20, 
+                 angle_diff: float = 20,
+                 checks: Optional[Dict] = None,
                  factors_path: Optional[str] = None):
         """
         Initialize an AssociatedGraph instance.
@@ -135,6 +136,12 @@ class AssociatedGraph:
         self.residues_similarity_cutoff = residues_similarity_cutoff
         self.angle_diff = angle_diff
         self.factors_path = factors_path
+        self.checks = checks or {
+            "angle": True,
+            "depth": True,
+            "rsa": True,
+            "neighbors": True
+        }
         self.graphs_list = self._prepare_graphs()
         
         self.associated_graph = self._build_associated_graph()
@@ -159,7 +166,8 @@ class AssociatedGraph:
             neighbor_similarity_cutoff=self.neighbor_similarity_cutoff, 
             rsa_similarity_threshold=self.rsa_similarity_threshold, 
             depth_similarity_threshold=self.depth_similarity_threshold, 
-            angle_diff=self.angle_diff
+            angle_diff=self.angle_diff,
+            checks=self.checks
         )
         log.info(f"Association product computed in {time() - start:.2f} seconds")
         return associated

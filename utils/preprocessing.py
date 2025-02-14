@@ -8,6 +8,7 @@ from classes.classes import StructureSERD
 from collections import defaultdict
 from os import path, makedirs
 from Bio import PDB
+import time
 
 log = logging.getLogger("Preprocessing")
 
@@ -87,10 +88,12 @@ def calculate_residue_depth(mol_path, serd_config=None):
         "metric": "minimum"
     })
 
-    if serd_config:
+    if isinstance(serd_config, str):
         with open(serd_config, "r") as f:
             config_serd.update(json.load(f))
-
+    elif isinstance(serd_config, dict):
+        config_serd.update(serd_config)
+        
     structure = StructureSERD(vdw=config_serd["vdw"])
     structure.load(mol_path)
     structure.model_surface(
@@ -141,8 +144,12 @@ def create_graphs(args):
 
         g = Graph(config=config, graph_path=mol_path[0])
 
+        start = time.time()
         residue_depth = calculate_residue_depth(mol_path=mol_path[0], serd_config=args.serd_config)
+        end = time.time()
 
+        log.debug(f"Depth calculated in {end - start} seconds")
+        
         params = residues_lists.get(mol_path[1], {})
         if "base" in params:
             params = residues_lists.get(params["base"], {})
