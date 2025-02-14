@@ -22,6 +22,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import networkx as nx
 from itertools import combinations
+import json
 
 log = logging.getLogger("CRSProtein")
 
@@ -713,12 +714,12 @@ def association_product(associated_graph_object, graphsList: List, association_m
     }
     
 
-    log.debug(f"I'll update the attributes now")
-    # Atribuindo os atributos ao objeto de forma dinâmica
-    for attr_name, value in attributes.items():
-        if value is not None:  # Evitar salvar valores None
-            setattr(associated_graph_object, attr_name, value)
-            log.debug(f"Atributo {attr_name} atualizado para: {getattr(associated_graph_object, attr_name, 'Não encontrado')}")
+    # log.debug(f"I'll update the attributes now")
+    # # Atribuindo os atributos ao objeto de forma dinâmica
+    # for attr_name, value in attributes.items():
+    #     if value is not None:  # Evitar salvar valores None
+    #         setattr(associated_graph_object, attr_name, value)
+    #         log.debug(f"Atributo {attr_name} atualizado para: {getattr(associated_graph_object, attr_name, 'Não encontrado')}")
 
 
     return Graph
@@ -1394,11 +1395,13 @@ def filter_nodes_angle(G: nx.Graph, graphs: List[nx.Graph], angle_diff: float):
         key for key, values in ang_node_dict.items() if any(value >= angle_diff for value in values)
     ]
 
-    non_compliant_nodes_sorted = sorted(non_compliant_nodes, key=lambda n: len(G[n]), reverse=True)
-    selected_nodes = non_compliant_nodes_sorted[:3]
+    non_compliant_nodes_sorted = sorted(non_compliant_nodes, key=lambda n: len(G[n]))
 
-    for node in selected_nodes:
-        neighbors = list(G.neighbors(node))
-        log.debug(f"Nó que NÃO passou: {node} - Vizinhos: {neighbors}")
+    # Cria um dicionário com os nós e seus respectivos vizinhos
+    nodes_data = {str(node): list(G.neighbors(node)) for node in non_compliant_nodes_sorted}
+
+    # Salva o dicionário como JSON
+    with open("non_compliant_nodes.json", "w", encoding="utf-8") as f:
+        json.dump(nodes_data, f, indent=4, ensure_ascii=False)
 
     return filtered_nodes_ang
