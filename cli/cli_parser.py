@@ -36,6 +36,8 @@ def parse_args():
                         help="Threshold for make an associate graph using Depth similarity")
     parser.add_argument('--rsa_similarity_threshold', type=float, default=0.95,
                         help="Threshold for make an associate graph using RSA similarity")
+    parser.add_argument('--distance_diff_threshold', type=float, default=2.0,
+                        help="Threshold for distance difference")
     parser.add_argument('--residues_lists', type=str, default=None,
                         help="Path to Json file which contains the pdb residues")
     parser.add_argument('--serd_config', type=str, default=None,
@@ -48,9 +50,8 @@ def parse_args():
                         help="Check depth similarity")
     parser.add_argument('--check_rsa', type=bool, default=True,
                         help="Check rsa similarity")
-    parser.add_argument('--check_neighboors', type=bool, default=True,
+    parser.add_argument('--check_neighbors', type=bool, default=True,
                         help="Check neighbors similarity")    
     parser.add_argument('--debug', type=bool, default=False,
                         help="Activate debug mode")
-
     return parser.parse_args()
