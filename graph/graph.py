@@ -91,86 +91,79 @@ class Graph:
 
 class AssociatedGraph:
     """Handles the association of multiple protein graphs."""
-
+    
     def __init__(self, 
-                 graphs: List[Tuple], 
-                 reference_graph: Union[str, int, None], 
-                 output_path: str, 
-                 path_full_subgraph: str, 
-                 run_name: str, 
-                 association_mode: str = "identity",
-                 centroid_threshold: int = 10, 
-                 neighbor_similarity_cutoff: float = 0.95, 
-                 rsa_similarity_threshold: float = 0.95, 
-                 depth_similarity_threshold: float = 0.95, 
-                 residues_similarity_cutoff: float = 0.95, 
-                 angle_diff: float = 20,
-                 checks: Optional[Dict] = None,
-                 factors_path: Optional[str] = None):
+                graphs: List[Tuple],  
+                reference_graph: Optional[Union[str, int]] = None,
+                output_path: str = ".",
+                run_name: str = "",
+                association_mode: str = "identity",
+                association_config: Optional[Dict[str, Any]] = None):
         """
-        Initialize an AssociatedGraph instance.
-
-        :param graphs: List of protein graphs.
-        :param reference_graph: Reference graph identifier.
-        :param output_path: Path to save results.
+        Initialize an AssociatedGraph instance with a reduced configuration.
+        
+        :param graphs: List of tuples (Graph instance, raw_data) from preprocessing.
+        :param reference_graph: Identifier for the reference graph.
+        :param output_path: Where to save results.
         :param run_name: Unique run identifier.
-        :param association_mode: Mode for associating graphs.
-        :param centroid_threshold: Threshold for centroid calculations.
-        :param neighbor_similarity_cutoff: Cutoff for neighbor similarity.
-        :param rsa_similarity_threshold: Cutoff for RSA similarity.
-        :param depth_similarity_threshold: Cutoff for depth similarity.
-        :param residues_similarity_cutoff: Cutoff for residue similarity.
-        :param angle_diff: Angle difference threshold.
-        :param factors_path: Path to external factors file.
+        :param association_mode: "identity" or "similarity".
+        :param association_config: Dictionary with keys:
+                - centroid_threshold (float)
+                - neighbor_similarity_cutoff (float)
+                - rsa_similarity_threshold (float)
+                - depth_similarity_threshold (float)
+                - residues_similarity_cutoff (float)
+                - angle_diff (float)
+                - checks (dict)
+                - factors_path (str or None)
         """
+        default_config = {
+            "centroid_threshold": 10.0,
+            "neighbor_similarity_cutoff": 0.95,
+            "rsa_similarity_threshold": 0.95,
+            "depth_similarity_threshold": 0.95,
+            "residues_similarity_cutoff": 0.95,
+            "angle_diff": 20.0,
+            "checks": {"neighbors": True, "rsa": True, "depth": True},
+            "factors_path": None
+        }
+        self.association_config = default_config.copy()
+        if association_config:
+            self.association_config.update(association_config)
+        
         self.graphs = graphs
+        self.reference_graph = reference_graph
         self.output_path = Path(output_path)
         self.run_name = run_name
-        self.path_full_subgraph = path_full_subgraph
-        self.reference_graph = reference_graph
-        self.association_mode = association_mode
-        self.centroid_threshold = centroid_threshold
-        self.neighbor_similarity_cutoff = neighbor_similarity_cutoff
-        self.rsa_similarity_threshold = rsa_similarity_threshold
-        self.depth_similarity_threshold = depth_similarity_threshold
-        self.residues_similarity_cutoff = residues_similarity_cutoff
-        self.angle_diff = angle_diff
-        self.factors_path = factors_path
-        self.checks = checks or {
-            "angle": True,
-            "depth": True,
-            "rsa": True,
-            "neighbors": True
-        }
-        self.graphs_list = self._prepare_graphs()
         
-        self.associated_graph = self._build_associated_graph()
-
-    def _prepare_graphs(self) -> List[Tuple]:
-        """Prepares the graph list by computing necessary mappings."""
-        return [
-            (g, raw, *build_contact_map(raw), np.array(g.graph["dssp_df"]["rsa"]), g.residue_depth)
-            for g, raw in self.graphs
-        ]
-
-    def _build_associated_graph(self) -> nx.Graph:
-        """Constructs the associated graph based on the given graphs."""
-        start = time()
-        associated = association_product(
-            associated_graph_object=self,
-            graphsList=self.graphs_list, 
-            association_mode=self.association_mode, 
-            factors_path=self.factors_path, 
-            centroid_threshold=self.centroid_threshold, 
-            residues_similarity_cutoff=self.residues_similarity_cutoff, 
-            neighbor_similarity_cutoff=self.neighbor_similarity_cutoff, 
-            rsa_similarity_threshold=self.rsa_similarity_threshold, 
-            depth_similarity_threshold=self.depth_similarity_threshold, 
-            angle_diff=self.angle_diff,
-            checks=self.checks
-        )
-        log.info(f"Association product computed in {time() - start:.2f} seconds")
-        return associated
+        self.graph_data = self._prepare_graph_data()
+        
+        self.associated_graph = association_product(self, 
+                                                    graph_data=self.graph_data,
+                                                    association_mode=association_mode,
+                                                    config=self.association_config)
+    
+    def _prepare_graph_data(self) -> List[dict]:
+        """
+        For each (Graph, raw) tuple, build a dictionary with the necessary data:
+            - "graph": The Graph instance.
+            - "contact_map": Output of build_contact_map(raw)[0].
+            - "residue_map_all": Output of build_contact_map(raw)[2].
+            - "rsa": np.array(g.graph["dssp_df"]["rsa"]).
+            - "residue_depth": g.residue_depth.
+        """
+        graph_data = []
+        for g, raw in self.graphs:
+            contact_map, residue_map, residue_map_all = build_contact_map(raw)
+            data = {
+                "graph": g,
+                "contact_map": contact_map,
+                "residue_map_all": residue_map_all,
+                "rsa": np.array(g.graph["dssp_df"]["rsa"]),
+                "residue_depth": g.residue_depth
+            }
+            graph_data.append(data)
+        return graph_data
     
     
     def add_spheres(self):
@@ -231,11 +224,3 @@ class AssociatedGraph:
         if count_pep_nodes == 0:
             print(f'No peptide nodes were found in the association graph. No subgraph will be generated.')
         pass
-        
-
-        
-        
-        
-    
-        
-
