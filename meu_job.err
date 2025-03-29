@@ -1,0 +1,6 @@
+OMP: Info #276: omp_set_nested routine deprecated, please use omp_set_max_active_levels instead.
+OMP: Info #276: omp_set_nested routine deprecated, please use omp_set_max_active_levels instead.
+OMP: Info #276: omp_set_nested routine deprecated, please use omp_set_max_active_levels instead.
+OMP: Info #276: omp_set_nested routine deprecated, please use omp_set_max_active_levels instead.
+OMP: Info #276: omp_set_nested routine deprecated, please use omp_set_max_active_levels instead.
+slurmstepd: error: *** JOB 11248 ON work2 CANCELLED AT 2025-03-14T14:04:57 ***

@@ -9,6 +9,7 @@ from collections import defaultdict
 from os import path
 from Bio import PDB
 import time
+import numpy as np
 
 logger = logging.getLogger("Preprocessing")
 
@@ -116,6 +117,8 @@ def calculate_residue_depth(pdb_file_path, serd_config=None):
         keep_only_interface=config["keep_only_interface"],
         ignore_backbone=config["ignore_backbone"]
     )
+    depth_value = depth["ResidueDepth"]
+    depth["ResidueDepth"] = (depth_value - np.min(depth_value)) / (np.max(depth_value) - np.min(depth_value))
     
     return depth
 
@@ -165,6 +168,7 @@ def create_graphs(args):
         graph_instance = Graph(config=graph_config, graph_path=file_info["input_path"])
         
         start_time = time.time()
+
         depth = calculate_residue_depth(pdb_file_path=file_info["input_path"], serd_config=args.serd_config)
         logger.debug(f"Depth calculated in {time.time() - start_time} seconds")
         

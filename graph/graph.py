@@ -138,11 +138,16 @@ class AssociatedGraph:
         
         self.graph_data = self._prepare_graph_data()
         
-        self.associated_graph = association_product(self, 
-                                                    graph_data=self.graph_data,
-                                                    association_mode=association_mode,
-                                                    config=self.association_config)
-    
+        result = association_product(graph_data=self.graph_data,
+                                    association_mode=association_mode,
+                                    config=self.association_config)
+        
+        if result is not None:
+            self.__dict__.update(result)
+            self.associated_graphs = result["AssociatedGraph"]
+        else:
+            self.associated_graphs = None
+
     def _prepare_graph_data(self) -> List[dict]:
         """
         For each (Graph, raw) tuple, build a dictionary with the necessary data:
@@ -158,6 +163,7 @@ class AssociatedGraph:
             data = {
                 "graph": g,
                 "contact_map": contact_map,
+                "residue_map": residue_map,
                 "residue_map_all": residue_map_all,
                 "rsa": np.array(g.graph["dssp_df"]["rsa"]),
                 "residue_depth": g.residue_depth
@@ -172,18 +178,27 @@ class AssociatedGraph:
     def draw_graph(self, show = True, save = True):
         if not show and not save:
             log.info("You are not saving or viewing the graph. Please leave at least one of the parameters as true.")
+            return 
+        if isinstance(self.associated_graphs, list):
+            for i, graph in enumerate(self.associated_graphs):
+
+                node_colors = [graph.nodes[node]['chain_id'] for node in graph.nodes]
+                # Draw the full cross-reactive subgraph
+                nx.draw(graph, with_labels=True, node_color=node_colors, node_size=50, font_size=6)
+                
+                if show:
+                    plt.show()
+                if save:
+                    if i == 0:
+                        plt.savefig(path.join(self.output_path, "Associated Graph Base.png"))
+                    else:
+
+                        plt.savefig(path.join(self.output_path, f"Associated Graph {i}.png"))
+                    plt.clf()
+        
+                    log.info(f"{i} GraphAssociated's plot saved in {self.output_path}")
         else:
-            node_colors = [self.associated_graph.nodes[node]['chain_id'] for node in self.associated_graph.nodes]
-            # Draw the full cross-reactive subgraph
-            nx.draw(self.associated_graph, with_labels=True, node_color=node_colors, node_size=50, font_size=6)
-            
-            if show:
-                plt.show()
-            if save:
-                plt.savefig(self.path_full_subgraph)
-                plt.clf()
-    
-                log.info(f"GraphAssociated's plot saved in {self.path_full_subgraph}")
+            log.warning(f"I cant draw the graph because it's {self.associated_graphs}")
   
     def grow_subgraph_bfs(self):
         # Build all possible common TCR interface pMHC subgraphs centered at the peptide nodes 

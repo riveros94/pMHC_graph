@@ -1,10 +1,8 @@
-import argparse
 import json
 import logging
 import os
 import sys
 from os import path
-
 from cli.cli_parser import parse_args
 from graph.graph import AssociatedGraph
 from utils.preprocessing import create_graphs
@@ -37,7 +35,6 @@ def main():
         "depth_similarity_threshold": args.depth_similarity_threshold,
         "residues_similarity_cutoff": args.residues_similarity_cutoff,
         "distance_diff_threshold": args.distance_diff_threshold,
-        "angle_diff": args.angle_diff,
         "checks": checks,
         "factors_path": args.factors_path
     }
@@ -51,27 +48,32 @@ def main():
         association_config=association_config
     )
 
-    if G.associated_graph is None:
+    if G.associated_graphs is None:
         return
 
     log.debug("Drawing Graph")
     G.draw_graph(show=True)
 
-    log.debug("Growing Subgraph")
-    try:
-        G.grow_subgraph_bfs()
-    except Exception as e:
-        log.error(f"Unable to grow subgraphs with BFS. Error: {e}")
+    # log.debug("Growing Subgraph")
+    # try:
+    #     G.grow_subgraph_bfs()
+    # except Exception as e:
+    #     log.error(f"Unable to grow subgraphs with BFS. Error: {e}")
 
-    # Prepare and save the output graph data as JSON.
-    graph_data = {
-        "nodes": [str(node) for node in G.associated_graph.nodes],
-        "edges": [(str(u), str(v)) for u, v in G.associated_graph.edges],
-        "neighbors": {
-            str(node): [str(neighbor) for neighbor in G.associated_graph.neighbors(node)]
-            for node in G.associated_graph.nodes
+    graph_data = dict()
+    for i in range(0, len(G.associated_graphs)):
+        nodes = list(G.associated_graphs[i].nodes)
+        edges = list(G.associated_graphs[i].edges)
+        neighbors = {
+            str(node): [str(neighbor) for neighbor in G.associated_graphs[i].neighbors(node)]
+            for node in nodes     
+            }
+
+        graph_data[i] = {
+            "nodes": nodes,
+            "edges": edges,
+            "neighbors": neighbors
         }
-    }
 
     output_json = path.join(args.output_path, f"graph_{args.run_name}.json")
     with open(output_json, "w") as f:
