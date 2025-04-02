@@ -1,6 +1,5 @@
 python3 main.py \
 --folder_path pdb_input \
---files_name mayv_ML_7KO8_clean.pdb,eeev_AB_6XO4_clean.pdb,chikv_DH_6NK5_clean.pdb \
 --run_name 4pmhc_identity_teste \
 --association_mode identity \
 --output_path data/tests/ \

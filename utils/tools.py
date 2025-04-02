@@ -558,6 +558,109 @@ def create_residues_factors(graphs: List, factors_path: str):
         residue_factors[i] = {node: calculate_atchley_average(node, read_emb) for node in nodes}     
     return residue_factors
 
+def discrete_distances(distance, n_divisions, threshold):
+
+    length_division = threshold / n_divisions
+    
+    if distance <= 0 or distance > threshold:
+        return None
+    
+    class_distance = int((distance - 1e-9) // length_division) + 1
+    
+    return class_distance
+
+def find_triads(G, contact_map, residue_map, residues_classes, threshold):
+    triads = {}
+    
+    for center in G.nodes():
+        neighbors = [n for n in G.neighbors(center) if n != center]
+        
+        for u, w in combinations(neighbors, 2):
+            outer_sorted = tuple(sorted([u, w]))
+            u_split, center_split, w_split = outer_sorted[0].split(":"), center.split(":"), outer_sorted[1].split(":")
+            u_res, center_res, w_res = u_split[1], center_split[1], w_split[1]
+            u_class, center_class, w_class = residues_classes[u_res], residues_classes[center_res], residues_classes[w_res] 
+ 
+            u_tuple, center_tuple, w_tuple = (u_split[0], int(u_split[2]), u_split[1]), (center_split[0], int(center_split[2]), center_split[1]), (w_split[0], int(w_split[2]), w_split[1])
+
+            u_index, center_index, w_index = residue_map[u_tuple], residue_map[center_tuple], residue_map[w_tuple]
+
+            d1 = contact_map[u_index, center_index]
+            d2 = contact_map[u_index, w_index]
+            d3 = contact_map[center_index, w_index]
+        
+            d1_discrete = discrete_distances(d1, 5, threshold)
+            d2_discrete = discrete_distances(d2, 10, 2*threshold)
+            d3_discrete = discrete_distances(d3, 5, threshold)
+            
+            if None not in [d1_discrete, d2_discrete, d3_discrete]:
+                triad = (u_class, center_class, w_class, d1_discrete, d2_discrete, d3_discrete)
+                if triad not in triads.keys():
+                    triads[triad] = {
+                        "count": 1,
+                        "triads_full": [(outer_sorted[0], center, outer_sorted[1], d1, d2, d3)]
+                    }
+                else:
+                    triads[triad]["count"] += 1
+                    triads[triad]["triads_full"].append((outer_sorted[0], center, outer_sorted[1], d1, d2, d3))
+       
+    return triads
+
+
+def create_residues_classes(path, residues_similarity_cutoff):
+
+    atchley_factors = pd.read_csv(path, index_col = 0)
+
+    sim = cosine_similarity(atchley_factors.values)
+    aas = [convert_1aa3aa(aa) for aa in atchley_factors.index.tolist()]
+    
+    parent = {aa: aa for aa in aas}
+    
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x, y):
+        root_x, root_y = find(x), find(y)
+        if root_x != root_y:
+            parent[root_y] = root_x
+
+    for i in range(len(aas)):
+        for j in range(i+1, len(aas)):
+            if sim[i, j] >= residues_similarity_cutoff:
+                union(aas[i], aas[j])
+    
+    root_to_class = {}
+
+    residue_to_class = {}
+    class_id = 1 
+    for aa in aas:
+        root = find(aa)
+        if root not in root_to_class:
+            root_to_class[root] = f"C{class_id}"
+            class_id += 1 
+        residue_to_class[aa] = root_to_class[root]
+
+    return residue_to_class
+
+def triads_to_dataframe(triads_list: list) -> pd.DataFrame:
+    all_keys = set()
+    for triads in triads_list:
+        all_keys.update(triads.keys())
+        
+    df = pd.DataFrame(index=sorted(all_keys), columns=range(len(triads_list)))
+    
+    for i, triads in enumerate(triads_list):
+        for triad, data in triads.items():
+            df.at[triad, i] = data["count"]
+
+    df = df.fillna(0).astype(int)
+    df = df[(df != 0).all(axis=1)]
+    
+    return df
+
 def association_product(graph_data: list,
                         association_mode: str,
                         config: dict,
@@ -565,8 +668,11 @@ def association_product(graph_data: list,
     logger = logging.getLogger("association.association_product")
     checks = config.get("checks", {"neighbors": True, "rsa": True, "depth": True})
     
+    residues_classes = create_residues_classes('resources/atchley_aa.csv', config["residues_similarity_cutoff"])
+
     graph_collection = {
         "graphs": [gd["graph"] for gd in graph_data],
+        "triads": [find_triads(gd["graph"], gd["contact_map"], gd["residue_map_all"], residues_classes, config["centroid_threshold"]) for gd in graph_data],
         "contact_maps": [gd["contact_map"] for gd in graph_data],
         "residue_maps_all": [gd["residue_map_all"] for gd in graph_data],
         "rsa_maps": [gd["rsa"] for gd in graph_data],
@@ -574,6 +680,12 @@ def association_product(graph_data: list,
         "nodes_graphs": [sorted(list(gd["graph"].nodes())) for gd in graph_data]
     }
     
+    df = triads_to_dataframe(graph_collection["triads"])
+    print(df)
+    print(sum(df.prod(axis=1)))
+    input("Continuar?")
+
+
     total_length = sum(len(g.nodes()) for g in graph_collection["graphs"])
     ranges_graph = indices_graphs(graph_collection["graphs"])
     metadata = {
@@ -1097,56 +1209,6 @@ def generate_frames(matrices: Dict, maps: Dict, idMatrices: int):
     log.info(f"The base frame has {len(base_frame)} nodes")
 
     return frames
-
-def create_graph_gpu(edges_dict: Dict, typeEdge: str = "edges_indices"):
-    import networkx as nx
-    import matplotlib.pyplot as plt
-    import numpy as np
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    # Prepara uma lista com o mesmo tamanho das frames para manter a ordem
-    total_frames = len(edges_dict.keys())
-    Graphs = [None] * total_frames
-
-    def process_frame(frame):
-        edges = edges_dict[frame][typeEdge]
-        G_sub = nx.Graph()
-
-        if len(edges) > 1:
-            for sublist in edges:
-                sublist = list(sublist)
-                node_a = tuple(sublist[0]) if isinstance(sublist[0], np.ndarray) else sublist[0]
-                node_b = tuple(sublist[1]) if isinstance(sublist[1], np.ndarray) else sublist[1]
-                G_sub.add_edge(node_a, node_b)
-
-            chain_color_map = {}
-            color_palette = plt.cm.get_cmap('tab10', 20)
-            color_counter = 1
-
-            if typeEdge == "edges_residues":
-                for nodes in G_sub.nodes:
-                    chain_id = nodes[0][0] + nodes[1][0]
-                    if chain_id not in chain_color_map and chain_id[::-1] not in chain_color_map:
-                        chain_color_map[chain_id] = color_palette(color_counter)[:3]
-                        chain_color_map[chain_id[::-1]] = chain_color_map[chain_id]
-                        # log.debug(f"Chain_id: {chain_id}, color: {chain_color_map[chain_id]}")
-                        color_counter += 1
-                    G_sub.nodes[nodes]['chain_id'] = chain_color_map[chain_id]
-
-            G_sub.remove_nodes_from(list(nx.isolates(G_sub)))
-        return frame, G_sub
-
-    with ThreadPoolExecutor() as executor:
-        futures = [executor.submit(process_frame, frame) for frame in range(total_frames)]
-        completed = 0
-        for future in as_completed(futures):
-            frame, graph = future.result()
-            Graphs[frame] = graph
-            completed += 1
-            if completed % max(1, total_frames // 100) == 0:
-                log.info(f"Criação dos graphs: {completed/total_frames*100:.2f}% concluído")
-
-    return Graphs
 
 def create_graph(edges_dict: Dict, typeEdge: str = "edges_indices"):
     Graphs = []
