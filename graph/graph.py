@@ -204,7 +204,7 @@ class AssociatedGraph:
   #           log.warning(f"I cant draw the graph because it's {self.associated_graphs}")
   # 
 
-    def draw_graph(self, show=True, save=True):
+    def draw_graph(self, show=False, save=True):
         if not show and not save:
             log.info("You are not saving or viewing the graph. Please leave at least one of the parameters as true.")
             return
@@ -213,55 +213,60 @@ class AssociatedGraph:
             log.warning(f"I can't draw the graph because it's {self.associated_graphs!r}")
             return
 
-        for i, graph in enumerate(self.associated_graphs):
-            # 1) Assign a chain_id to each node (hard‑coded example = "AAAA")
-            for node in graph.nodes():
-                # if you want to compute from the residues, do something like:
-                residues = [r for r in node]  # flatten
-                chains = [r.split(':')[0] for r in residues]
-                graph.nodes[node]['chain_id'] = ''.join(chains)
+        for j, comps in enumerate(self.associated_graphs):
+            for i, graph in enumerate(comps[0]): 
+                # 1) Assign a chain_id to each node (hard‑coded example = "AAAA")
+                print(graph)
+                for node in graph.nodes():
+                    # if you want to compute from the residues, do something like:
+                    residues = [r for r in node]  # flatten
+                    chains = [r.split(':')[0] for r in residues]
+                    graph.nodes[node]['chain_id'] = ''.join(chains)
 
-            # 2) Build color palette
-            chain_ids = sorted({data['chain_id'] for _, data in graph.nodes(data=True)})
-            cmap = plt.cm.get_cmap('tab10', len(chain_ids))
-            palette = {cid: cmap(idx) for idx, cid in enumerate(chain_ids)}
-            node_colors = [palette[graph.nodes[n]['chain_id']] for n in graph.nodes()]
+                # 2) Build color palette
+                chain_ids = sorted({data['chain_id'] for _, data in graph.nodes(data=True)})
+                cmap = plt.cm.get_cmap('tab10', len(chain_ids))
+                palette = {cid: cmap(idx) for idx, cid in enumerate(chain_ids)}
+                node_colors = [palette[graph.nodes[n]['chain_id']] for n in graph.nodes()]
 
-            # 3) Build the labels exactly as you asked:
-            node_labels = {}
-            for n in graph.nodes():
-                if isinstance(n, tuple) and n and isinstance(n[0], tuple):
-                    combo1, combo2 = n
-                    # repr gives "('A:GLU:161', 'A:ARG:157', 'A:VAL:158')"
-                    # strip spaces so you get "('A:GLU:161','A:ARG:157','A:VAL:158')"
-                    lab1 = repr(combo1).replace(" ", "")
-                    lab2 = repr(combo2).replace(" ", "")
-                    node_labels[n] = f"{lab1}{lab2}"
-                else:
-                    node_labels[n] = str(n)
+                # 3) Build the labels exactly as you asked:
+                node_labels = {}
+                for n in graph.nodes():
+                    if isinstance(n, tuple) and n and isinstance(n[0], tuple):
+                        combo1, combo2 = n
+                        # repr gives "('A:GLU:161', 'A:ARG:157', 'A:VAL:158')"
+                        # strip spaces so you get "('A:GLU:161','A:ARG:157','A:VAL:158')"
+                        lab1 = repr(combo1).replace(" ", "")
+                        lab2 = repr(combo2).replace(" ", "")
+                        node_labels[n] = f"{lab1}{lab2}"
+                    else:
+                        node_labels[n] = str(n)
 
-            # 4) Draw it
-            nx.draw(
-                graph,
-                with_labels=True,
-                labels=node_labels,
-                node_color=node_colors,
-                node_size=50,
-                font_size=6
-            )
-
-            # 5) Show/save
-            if show:
-                plt.show()
-            if save:
-                filename = (
-                    "Associated Graph Base.png" if i == 0
-                    else f"Associated Graph {i}.png"
+                # 4) Draw it
+                nx.draw(
+                    graph,
+                    with_labels=True,
+                    labels=node_labels,
+                    node_color=node_colors,
+                    node_size=50,
+                    font_size=6
                 )
-                full = path.join(self.output_path, filename)
-                plt.savefig(full)
-                plt.clf()
-                log.info(f"{i}‑th associated graph saved to {full}")
+
+                # 5) Show/save
+                if show:
+                    plt.show()
+                if save:
+                    if i == 0 and j == 0: 
+                        filename = f"Full Associated Graph Base.png"
+                    elif i == 0 and j !=0: 
+                        filename = f"{j} - Associated Graph Base.png"
+                    else:
+                        filename = f"{j} - Associated Graph {i}.png"
+
+                    full = path.join(self.output_path, filename)
+                    plt.savefig(full)
+                    plt.clf()
+                    log.info(f"{j}: {i}‑th associated graph saved to {full}")
 
     def grow_subgraph_bfs(self):
         # Build all possible common TCR interface pMHC subgraphs centered at the peptide nodes 

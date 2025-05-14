@@ -1,8 +1,8 @@
 python3 main.py \
 --folder_path pdb_input \
---run_name 4pmhc_identity_teste \
+--run_name chikv_mayv_teste \
 --association_mode identity \
---output_path data/tests/ \
+--output_path data/tests_chikv/ \
 --residues_lists residues_lists.json \
 --factors_path  resources/atchley_aa.csv \
 --neighbor_similarity_cutoff 0.8 \

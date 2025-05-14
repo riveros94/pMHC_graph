@@ -52,7 +52,7 @@ def save_pdb_with_spheres(atomic_data, selected_residues_data, pdb_filename):
             residue_number = residue["ResidueNumber"]
             chain = residue["Chain"]
             coordinates = residue["Coordinates"]
-            radius = 1.5  # Definindo um raio para a esfera
+            radius = 1.5  # Definindo um raio para a es fera
 
             sphere_line = "HETATM{:5d}  SPC {:<3} {:<1} {:>4}   {:>8.3f}{:>8.3f}{:>8.3f}  1.00  0.00           SPH\n".format(
                 residue_number * 100, "SPC", chain, residue_number, coordinates[0], coordinates[1], coordinates[2]
@@ -1141,7 +1141,8 @@ def association_product(graph_data: list,
     G.add_edges_from(tuple_edges)
     components = list(nx.connected_components(G))
 
-    Graphs = []
+    Graphs = [([G], 0)]
+
     for comp_id, component in enumerate(components):
         log.debug(f"Processing component {comp_id} with {len(component)} nodes")
 
@@ -1185,7 +1186,7 @@ def association_product(graph_data: list,
             nodes=nodes_indices,
             matrices=matrices_dict,
             maps=maps,
-            threshold=3,
+            threshold=1,
         )
 
         frames = generate_frames(
@@ -1193,7 +1194,7 @@ def association_product(graph_data: list,
             maps=maps_mul,
         )
 
-        Graphs.extend(create_graph(frames, typeEdge="edges_residues"))
+        Graphs.extend([(create_graph(frames, typeEdge="edges_residues"), comp_id+1)])
 
  #    nodes = list(G.nodes())
  #    nodes_indices = []
@@ -1563,7 +1564,7 @@ def generate_frames(matrices, maps):
     edges_original_0, edges_idx_0, edges_res_0 = convert_edges_to_residues(edges_base, maps)
     frames[0] = {
         "edges_indices": edges_idx_0,
-        "edges_residues": edges_res_0
+        "edges_residues": edges_res_0,
     }
 
     seen_edge_sets = set()
@@ -1571,14 +1572,39 @@ def generate_frames(matrices, maps):
     k = 1
 
     for i in range(K):
-        adj_i = np.where(adj[i] == 1)[0]
-        if adj_i.size == 0:
+        # adj_i = np.where(adj[i] == 1)[0]
+        # if adj_i.size == 0:
+        #     continue
+
+        # inter = dm[i].copy()
+        # 
+        # for t in adj_i:
+        #     inter *= dm[t]
+
+        # inter_idx = np.where(inter == 1)[0]
+        # if inter_idx.size < 4:
+        #     continue
+
+        inter_set = set(np.where(dm[i] == 1)[0])
+        current_layer = set(np.where(adj[i] == 1)[0])
+        if not current_layer:
             continue
 
-        inter = dm[i].copy()
-        for t in adj_i:
-            inter *= dm[t]
-        inter_idx = np.where(inter == 1)[0]
+        visited = set()  # nodes whose compatibility we've already intersected
+        while current_layer:
+            current_layer -= visited
+            if not current_layer:
+                break
+            for n in current_layer:
+                inter_set &= set(np.where(dm[n] == 1)[0])
+            visited |= current_layer
+            next_layer = set()
+            for n in current_layer:
+                nbrs = set(np.where(adj[n] == 1)[0])
+                next_layer |= nbrs
+            current_layer = next_layer & inter_set
+
+        inter_idx = np.fromiter(inter_set, dtype=int)
         if inter_idx.size < 4:
             continue
 
@@ -1637,7 +1663,6 @@ def generate_frames(matrices, maps):
         }
         k += 1
 
-    # reordena frames >0 pelos maiores primeiros (mantém frame 0)
     others = sorted(
         (fid for fid in frames if fid != 0),
         key=lambda fid: len(frames[fid]["edges_indices"]),
