@@ -52,7 +52,7 @@ def main():
         return
 
     log.debug("Drawing Graph")
-    G.draw_graph(show=True)
+    G.draw_graph(show=False, save=True)
 
     # log.debug("Growing Subgraph")
     # try:
@@ -61,19 +61,21 @@ def main():
     #     log.error(f"Unable to grow subgraphs with BFS. Error: {e}")
 
     graph_data = dict()
-    for i in range(0, len(G.associated_graphs)):
-        nodes = list(G.associated_graphs[i].nodes)
-        edges = list(G.associated_graphs[i].edges)
-        neighbors = {
-            str(node): [str(neighbor) for neighbor in G.associated_graphs[i].neighbors(node)]
-            for node in nodes     
-            }
+    for j, comps in enumerate(G.associated_graphs):
+        graph_data[j] = {"comp": j, "frames": {}}
+        for i in range(len(comps[0])):
+            nodes = list(comps[0][i].nodes)
+            edges = list(comps[0][i].edges)
+            neighbors = {
+                str(node): [str(neighbor) for neighbor in comps[0][i].neighbors(node)]
+                for node in nodes     
+                }
 
-        graph_data[i] = {
-            "nodes": nodes,
-            "edges": edges,
-            "neighbors": neighbors
-        }
+            graph_data[j]["frames"][i] = {
+                "nodes": nodes,
+                "edges": edges,
+                "neighbors": neighbors
+            }
 
     output_json = path.join(args.output_path, f"graph_{args.run_name}.json")
     with open(output_json, "w") as f:
