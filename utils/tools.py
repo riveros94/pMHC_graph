@@ -1008,19 +1008,75 @@ def create_distance_matrix_final(
     return matrices_out, maps_out
 
 def create_std_matrix(nodes, matrices: dict, maps: dict, threshold: float = 3.0):
+    # print(f"Nodes: {nodes}")
     dim = len(nodes[0])
     K = len(nodes) 
+
+    # inv_maps = maps["inv_maps"]
+
+    # idx_lgln = inv_maps[0][("L", 340, "GLN")]
+    # idx_dgln = inv_maps[1][("D", 102, "GLN")]
+
+    # idx_lval = inv_maps[0][("L", 342, "VAL")]
+    # idx_dval = inv_maps[1][("D", 84, "VAL")]
+
+    maps_out = {}
+    maps_out["possible_nodes"] = {}
+    for i, node in enumerate(nodes):
+        maps_out["possible_nodes"][i]      = node
+        maps_out["possible_nodes"][str(node)] = i
+    maps["possible_nodes"] = maps_out["possible_nodes"]
     
     stacked_pruned  = np.empty((dim, K, K))
     stacked_thresh  = np.empty_like(stacked_pruned)
+
     for p in range(dim):
         idx = [node[p] for node in nodes]
+        # print(f"Idx: {idx}")
+        # input()
         for i in range(K):
             stacked_pruned[p,  i, :] = matrices["dm_pruned"][idx[i],  idx]
             stacked_thresh[p, i, :]  = matrices["dm_thresholded"][idx[i], idx]
-     
+
     var_pruned = np.std(stacked_pruned, axis=0)    
-    var_thresh = np.std(stacked_thresh, axis=0)          
+    var_thresh = np.std(stacked_thresh, axis=0)  
+     
+    mask_pruned = np.any((stacked_pruned == 0) | np.isnan(stacked_pruned), axis=0)
+    mask_thresh = np.any((stacked_thresh == 0) | np.isnan(stacked_thresh), axis=0)
+
+    var_pruned = np.where(mask_pruned, np.nan, var_pruned)
+    var_thresh = np.where(mask_thresh, np.nan, var_thresh)        
+
+    # try:
+
+    #     gln_id = maps["possible_nodes"][f'[{idx_lgln}, {idx_dgln}]']
+    #     val_id = maps["possible_nodes"][f'[{idx_lval}, {idx_dval}]']
+
+    #     print(f"Idx_gln: [{idx_lgln}, {idx_dgln}] | {gln_id}")
+    #     print(f"Idx_val: [{idx_lval}, {idx_dval}] | {val_id}")
+
+    #     print(stacked_thresh[:, gln_id, val_id])
+    #     print(stacked_thresh[:, val_id, gln_id])
+
+    #     print(stacked_thresh[:, gln_id, :])
+    #     print(stacked_thresh[:, val_id, :])    
+
+    #     gln_val_adj = var_pruned[gln_id, val_id]
+    #     gln_val_dm = var_thresh[gln_id, val_id]
+
+    #     print(matrices["dm_thresholded"][[idx_lgln, idx_dgln], idx_lgln])
+    #     print(matrices["dm_pruned"][[idx_lgln, idx_dgln], idx_lgln])
+
+    #     print(matrices["dm_thresholded"][[idx_lval, idx_dval], idx_lval])
+    #     print(matrices["dm_pruned"][[idx_lval, idx_dval], idx_lval])
+
+    #     print(gln_val_adj)
+    #     print(gln_val_dm)
+
+    #     input()
+
+    # except:
+    #     pass
 
     mask_valid = (0 < var_pruned) & (var_pruned < threshold)
     mask_invalid = ~mask_valid
@@ -1037,12 +1093,7 @@ def create_std_matrix(nodes, matrices: dict, maps: dict, threshold: float = 3.0)
         "adj_possible_nodes": var_thresh
     }
     
-    maps_out = {}
-    maps_out["possible_nodes"] = {}
-    for i, node in enumerate(nodes):
-        maps_out["possible_nodes"][i]      = node
-        maps_out["possible_nodes"][str(node)] = i
-    maps["possible_nodes"] = maps_out["possible_nodes"]
+
     
     return new_matrices, maps
 
@@ -1133,8 +1184,80 @@ def association_product(graph_data: list,
     matrices_dict["dm_pruned"] = dm_prune
 
     cross_combos = cross_protein_triads(graph_collection["triads"])
+
+    # rows = []
+    # for key, value in cross_combos.items():
+    #     aa1, aa2, aa3, s1, s2, s3 = key
+    #     for (residues_1, residues_2) in value:
+    #         row = {
+    #             "AA1": aa1,
+    #             "AA2": aa2,
+    #             "AA3": aa3,
+    #             "Distance1": s1,
+    #             "Distance2": s2,
+    #             "Distance3": s3,
+    #             "Residues_1": residues_1,
+    #             "Residues_2": residues_2
+    #         }
+    #         rows.append(row)
+
+    # df = pd.DataFrame(rows)
+
+    # import ast
+    # def safe_eval(val):
+    #     if isinstance(val, str):
+    #         return ast.literal_eval(val)
+    #     return val  # já é uma tupla, retorna direto
+
+    # df["Residues_1"] = df["Residues_1"].apply(safe_eval)
+    # df["Residues_2"] = df["Residues_2"].apply(safe_eval)
+
+    # # Resíduo que você quer buscar
+    # target1 = "L:GLN:340"
+    # target2 = "L:VAL:338"
+    # target3 = "L:VAL:342"
+    # # Filtrar as linhas onde o resíduo aparece em qualquer posição
+    # mask1 = df["Residues_1"].apply(lambda x: target1 in x) | df["Residues_2"].apply(lambda x: target1 in x)
+    # mask2 = df["Residues_1"].apply(lambda x: target2 in x) | df["Residues_2"].apply(lambda x: target2 in x)
+    # mask3 = df["Residues_1"].apply(lambda x: target3 in x) | df["Residues_2"].apply(lambda x: target3 in x)
+    # # Resultado: todas as linhas que contêm esse resíduo
+    # matches1 = df[mask1]
+    # matches2 = df[mask2]
+    # matches3 = df[mask3]
+    # # Quantas vezes aparece
+    # count1 = matches1.shape[0]
+    # count2 = matches2.shape[0]
+    # count3 = matches3.shape[0]
+
+    # print(f"{target1} aparece em {count1} pares de resíduos:")
+    # print(matches1)
+    # print("\n")
+
+    # print(f"{target2} aparece em {count2} pares de resíduos:")
+    # print(matches2)
+    # print("\n")
+
+    # print(f"{target3} aparece em {count3} pares de resíduos:")
+    # print(matches3)
+    # print("\n")
+
+    # log.debug(f"Cross Combos:")
+    # log.debug(df)
+
+    # df.to_csv('cross_combos.csv')
+    # input()
     triad_graph = build_combos_graph(cross_combos)
     
+    # target_residue = "L:GLN:340"
+    # Procurar em todas as arestas onde aparece esse resíduo
+    # matching_edges = [edge for edge in triad_graph if any(target_residue in res for pair in edge for res in pair)]
+
+    # Resultado
+    # print(f"{target_residue} aparece em {len(matching_edges)} arestas:")
+    # for edge in matching_edges:
+    #     print(edge)
+
+    # input()
     tuple_edges = [tuple(edge) for edge in triad_graph]
     log.debug(f"Number of edges: {len(tuple_edges)}")
     G = nx.Graph()
@@ -1142,8 +1265,9 @@ def association_product(graph_data: list,
     components = list(nx.connected_components(G))
 
     Graphs = [([G], 0)]
-
-    for comp_id, component in enumerate(components):
+    comp_id = 1
+    maps["inv_maps"] = inv_maps
+    for component in components:
         log.debug(f"Processing component {comp_id} with {len(component)} nodes")
 
         subG = nx.Graph()
@@ -1167,7 +1291,25 @@ def association_product(graph_data: list,
                     dm_thresh_graph[idx_u, idx_v] = dm_thresh[idx_u, idx_v]
                     dm_thresh_graph[idx_v, idx_u] = dm_thresh[idx_v, idx_u]
 
+        # idx_lgln = inv_maps[0][("L", 340, "GLN")]
+        # idx_dgln = inv_maps[1][("D", 102, "GLN")]
+
+        # idx_lval = inv_maps[0][("L", 342, "VAL")]
+        # idx_dval = inv_maps[1][("D", 84, "VAL")]
+
+        # print(f"Id L GLN: {idx_lgln}, Id D GLN: {idx_dgln}")
+        # print(f"Id L VAL: {idx_lval}, Id D VAL: {idx_dval}")
+        # if dm_thresh_graph[idx_gln, idx_val] > 0:
         
+        #     print(f"Comp id: {comp_id}")
+        #     print("Dm trhesh L:GLN:340 e L:VAL:342")
+        #     print(dm_thresh_graph[idx_gln, idx_val])
+
+        #     print("Dm pruned L:GLN:340 e L:VAL:342")
+
+        #     print(dm_prune[idx_gln, idx_val])
+        #     input()
+
         matrices_dict["dm_thresholded"] = dm_thresh_graph
     
         nodes = list(subG.nodes())
@@ -1180,21 +1322,40 @@ def association_product(graph_data: list,
                 res_tuple = (res_split[0], int(res_split[2]), res_split[1])
                 res_indice = inv_maps[k][res_tuple]
                 node_converted.append(res_indice)
+
             nodes_indices.append(node_converted)
+
+
 
         matrices_mul, maps_mul = create_std_matrix(
             nodes=nodes_indices,
             matrices=matrices_dict,
             maps=maps,
-            threshold=1,
+            threshold=3,
         )
 
+        # try:
+        #     gln_id = maps["possible_nodes"][f'[{idx_lgln}, {idx_dgln}]']
+        #     val_id = maps["possible_nodes"][f'[{idx_lval}, {idx_dval}]']
+
+        #     gln_val_adj = matrices_mul["adj_possible_nodes"][gln_id, val_id]
+        #     gln_val_dm = matrices_mul["dm_possible_nodes"][gln_id, val_id]
+
+        #     print(gln_val_adj)
+        #     print(gln_val_dm)
+
+        #     input()
+        # except:
+        #     pass
         frames = generate_frames(
             matrices=matrices_mul,
             maps=maps_mul,
         )
 
-        Graphs.extend([(create_graph(frames, typeEdge="edges_residues"), comp_id+1)])
+        if len(frames.keys()) > 1:
+            Graphs.extend([(create_graph(frames, typeEdge="edges_residues", comp_id=comp_id), comp_id)])
+
+            comp_id += 1
 
  #    nodes = list(G.nodes())
  #    nodes_indices = []
@@ -1573,38 +1734,94 @@ def generate_frames(matrices, maps):
 
     for i in range(K):
         # adj_i = np.where(adj[i] == 1)[0]
+
         # if adj_i.size == 0:
         #     continue
 
         # inter = dm[i].copy()
-        # 
+        
         # for t in adj_i:
         #     inter *= dm[t]
 
         # inter_idx = np.where(inter == 1)[0]
+
         # if inter_idx.size < 4:
         #     continue
 
-        inter_set = set(np.where(dm[i] == 1)[0])
-        current_layer = set(np.where(adj[i] == 1)[0])
-        if not current_layer:
+        # node_set = frozenset(inter_idx)
+
+        # if node_set in checked_node_sets:
+        #     continue
+
+        # checked_node_sets.add(node_set)
+        # nodes_idx = np.array(list(node_set))
+        # sub_adj = adj[nodes_idx][:, nodes_idx]
+        # degrees = np.sum(np.nan_to_num(sub_adj), axis=1)
+        # valid_mask = degrees > 2
+
+        # if valid_mask.sum() < 4:
+        #     continue
+        
+        # valid_idx = nodes_idx[valid_mask]
+        # filtered = sub_adj[valid_mask][:, valid_mask]
+
+        # edges = {
+        #     frozenset((int(valid_idx[p]), int(valid_idx[q])))
+        #     for p, q in zip(*np.where(filtered == 1))
+
+        # }
+
+        # if len(edges) < 4:
+        #     continue
+
+        # edge_key = frozenset(edges)
+        # if edge_key in seen_edge_sets:
+        #     continue
+
+        # seen_edge_sets.add(edge_key)
+        # edges_original, edges_idx, edges_res = convert_edges_to_residues(edges, maps)
+        # tempG = nx.Graph()
+
+        # for edge_o in edges_original:
+        #     tempG.add_edge(*edge_o)
+
+        # connected_comps = list(nx.connected_components(tempG))
+        # right_comp = None
+
+        # for comp in connected_comps:
+        #     if i in comp:
+        #         right_comp = comp
+        #         break
+
+        # else:
+        #     continue
+
+        # subG = tempG.subgraph(right_comp)
+
+        inter     = dm[i].copy()
+        accepted  = {i}
+        frontier  = set(np.where(adj[i] == 1)[0])
+        if not frontier:
             continue
+        visited = set()
 
-        visited = set()  # nodes whose compatibility we've already intersected
-        while current_layer:
-            current_layer -= visited
-            if not current_layer:
+        while frontier:
+            frontier -= visited
+            if not frontier:
                 break
-            for n in current_layer:
-                inter_set &= set(np.where(dm[n] == 1)[0])
-            visited |= current_layer
-            next_layer = set()
-            for n in current_layer:
-                nbrs = set(np.where(adj[n] == 1)[0])
-                next_layer |= nbrs
-            current_layer = next_layer & inter_set
+            for u in frontier:
+                inter *= dm[u]        # logical AND by multiplication
+            visited |= frontier
+            accepted |= frontier
 
-        inter_idx = np.fromiter(inter_set, dtype=int)
+            # Next layer = neighbours of frontier still in inter
+            next_layer = set()
+            for u in frontier:
+                nbrs = set(np.where(adj[u] == 1)[0])
+                next_layer |= nbrs
+            frontier = next_layer & set(np.where(inter == 1)[0])
+
+        inter_idx = np.where(inter == 1)[0]
         if inter_idx.size < 4:
             continue
 
@@ -1613,55 +1830,46 @@ def generate_frames(matrices, maps):
             continue
         checked_node_sets.add(node_set)
 
-        nodes_idx = np.array(list(node_set))
-        sub_adj = adj[nodes_idx][:, nodes_idx]
-        degrees = np.sum(np.nan_to_num(sub_adj), axis=1)
-        valid_mask = degrees > 2
+        nodes_idx = np.array(sorted(inter_idx), dtype=int)
+        sub_adj   = adj[np.ix_(nodes_idx, nodes_idx)]
+        degrees   = np.sum(np.nan_to_num(sub_adj), axis=1)
+        valid_mask = (degrees > 2)
         if valid_mask.sum() < 4:
             continue
 
-        valid_idx = nodes_idx[valid_mask]
-        filtered = sub_adj[valid_mask][:, valid_mask]
+        valid_nodes = nodes_idx[valid_mask]
+        filtered    = adj[np.ix_(valid_nodes, valid_nodes)]
 
+        # 5) Build edge set and intersect with base
         edges = {
-            frozenset((int(valid_idx[p]), int(valid_idx[q])))
+            frozenset((int(valid_nodes[p]), int(valid_nodes[q])))
             for p, q in zip(*np.where(filtered == 1))
         }
-        if len(edges) < 4:
+        frame_edges = {e for e in edges}
+        if len(frame_edges) < 4:
             continue
 
-        edge_key = frozenset(edges)
+        edge_key = frozenset(frame_edges)
         if edge_key in seen_edge_sets:
             continue
         seen_edge_sets.add(edge_key)
 
-        edges_original, edges_idx, edges_res = convert_edges_to_residues(edges, maps)
-
-        tempG = nx.Graph()
-        for edge_o in edges_original:
-            tempG.add_edge(*edge_o)
-        
-        connected_comps = list(nx.connected_components(tempG))
-
-        right_comp = None
-        for comp in connected_comps:
-            if i in comp:
-                right_comp = comp
-                break
-        else:
-            continue
-        
-        subG = tempG.subgraph(right_comp)
-
-        edges = set(list(subG.edges()))
-
-        edges_original, edges_idx, edges_res = convert_edges_to_residues(edges, maps, True)
-
+        _, edges_idx, edges_res = convert_edges_to_residues(frame_edges, maps, True)
         frames[k] = {
             "edges_indices": edges_idx,
-            "edges_residues": edges_res
+            "edges_residues": edges_res,
         }
         k += 1
+        # edges = set(list(subG.edges()))
+        # edges_original, edges_idx, edges_res = convert_edges_to_residues(edges, maps, True)
+
+        # frames[k] = {
+        #     "edges_indices": edges_idx,
+        #     "edges_residues": edges_res
+
+        # }
+
+        # k += 1
 
     others = sorted(
         (fid for fid in frames if fid != 0),
@@ -1972,7 +2180,7 @@ def generate_frames_old_bkp(matrices: Dict, maps: Dict, idMatrices: int):
 
     return frames
 
-def create_graph(edges_dict: Dict, typeEdge: str = "edges_indices"):
+def create_graph(edges_dict: Dict, typeEdge: str = "edges_indices", comp_id = 0):
     Graphs = []
     k = 0
     for frame in range(0, len(edges_dict.keys())):
@@ -2007,7 +2215,7 @@ def create_graph(edges_dict: Dict, typeEdge: str = "edges_indices"):
                     G_sub.nodes[nodes]['chain_id'] = chain_color_map[chain_id]
             
             G_sub.remove_nodes_from(list(nx.isolates(G_sub)))
-            log.debug(f"Number of nodes graph {k}: {len(G_sub.nodes)}")
+            log.debug(f"{comp_id} Number of nodes graph {k}: {len(G_sub.nodes)}")
             k+= 1
 
             if k >= 100:
