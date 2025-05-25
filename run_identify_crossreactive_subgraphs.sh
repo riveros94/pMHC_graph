@@ -1,8 +1,8 @@
 python3 main.py \
 --folder_path pdb_input \
---run_name chikv_mayv_teste \
+--run_name mio_hemo \
 --association_mode identity \
---output_path data/tests_chikv/ \
+--output_path data/tests_mio_hemo/ \
 --residues_lists residues_lists.json \
 --factors_path  resources/atchley_aa.csv \
 --neighbor_similarity_cutoff 0.8 \
