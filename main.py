@@ -26,7 +26,8 @@ def main():
         "neighbors": args.check_neighbors
     }
 
-    graphs, reference_graph = create_graphs(args)
+    # graphs, reference_graph = create_graphs(args)
+    graphs = create_graphs(args)
 
     association_config = {
         "centroid_threshold": args.centroid_threshold,
@@ -41,7 +42,7 @@ def main():
 
     G = AssociatedGraph(
         graphs=graphs,
-        reference_graph=reference_graph,
+        # reference_graph=reference_graph,
         output_path=args.output_path,
         run_name=args.run_name,
         association_mode=args.association_mode,

@@ -10,6 +10,7 @@ from os import path
 from Bio import PDB
 import time
 import numpy as np
+from typing import Tuple, Dict
 
 logger = logging.getLogger("Preprocessing")
 
@@ -34,7 +35,7 @@ def remove_water_from_pdb(source_file, dest_file):
         logger.debug(f"Saved cleaned PDB file: {dest_file}")
 
 
-def get_exposed_residues(graph: Graph, rsa_filter=0.1, selection_params=None):
+def get_exposed_residues(graph: Graph, rsa_filter=0.1, depth_filter=3, selection_params=None):
     selection_params = selection_params or {}
     
     if rsa_filter is None:
@@ -123,7 +124,7 @@ def calculate_residue_depth(pdb_file_path, serd_config=None):
     return depth
 
 
-def create_graphs(args):
+def create_graphs(args) -> List[Tuple]:
     with open(args.residues_lists, "r") as f:
         residues_data = json.load(f)
     
@@ -134,25 +135,24 @@ def create_graphs(args):
     
     if not args.files_name:
         pdb_files = list_pdb_files(pdb_directory)
-        if not pdb_files:
-            raise Exception(f"No files found in: {pdb_directory}")
-        
-        selected_files, reference_graph = get_user_selection(pdb_files, pdb_directory)
+
+        selected_files = get_user_selection(pdb_files, pdb_directory)
         selected_files = [
             {"input_path": file_pair[0], "name": file_pair[1]} for file_pair in selected_files
         ]
-        if reference_graph:
-            reference_graph = {"input_path": reference_graph[0], "name": reference_graph[1]}
+        # if reference_graph:
+        #     reference_graph = {"input_path": reference_graph[0], "name": reference_graph[1]}
     else:
         file_names = args.files_name.split(',')
         selected_files = []
-        reference_graph = None
+        # reference_graph = None
         for fname in file_names:
             file_info = {"input_path": path.join(pdb_directory, fname), "name": fname}
-            if args.reference_graph == fname:
-                reference_graph = file_info
-            else:
-                selected_files.append(file_info)
+            selected_files.append(file_info)
+            # if args.reference_graph == fname:
+            #     reference_graph = file_info
+            # else:
+            #     selected_files.append(file_info)
     
     Path(args.output_path).mkdir(parents=True, exist_ok=True)
     graph_config = make_graph_config(centroid_threshold=args.centroid_threshold)
@@ -178,6 +178,7 @@ def create_graphs(args):
         subgraph = get_exposed_residues(
             graph=graph_instance,
             rsa_filter=args.rsa_filter,
+            depth_filter=args.depth_filter,
             selection_params=selection_params
         )
         # subgraph.residue_depth = depth

@@ -10,12 +10,14 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Building common subgraphs")
     parser.add_argument('--folder_path', type=str, default=None,
                         help='Folder path with PDB input files.')
+    parser.add_argument('--residues_classes', type=str, default=None,
+                        help="File with the residues agrouped by classes.")
     parser.add_argument('--files_name', type=str, default=None,
                         help="PDB files separated by comma ','. If not provided, the system will ask for user to choose in menu")
     parser.add_argument('--reference_graph', type=str, default=None,
                         help="Reference Graph to be used.")
-    # parser.add_argument('--interface_list', type=str, default='',
-                        # help='File with a canonical list of MHC residues at the interface with TCR. No header needed for this file.')
+    parser.add_argument('--interface_list', type=str, default='',
+                        help='File with a canonical list of MHC residues at the interface with TCR. No header needed for this file.')
     parser.add_argument('--centroid_threshold', type=int, default=10,
                         help="Distance threshold for building the molA and molB interface graphs")
     parser.add_argument('--run_name', type=str, default='test',
