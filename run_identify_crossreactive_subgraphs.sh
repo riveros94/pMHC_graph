@@ -1,4 +1,4 @@
-python3 main.py \
+python3 -m memory_profiler main.py \
 --folder_path pdb_input \
 --run_name mio_hemo \
 --association_mode identity \
@@ -9,6 +9,7 @@ python3 main.py \
 --residues_similarity_cutoff 0.8 \
 --rsa_similarity_threshold 0.8 \
 --rsa_filter 0.1 \
+--depth_filter 10 \
 --depth_similarity_threshold 0.8 \
 --distance_diff_threshold 3.0 \
 --debug True

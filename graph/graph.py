@@ -12,10 +12,17 @@ from utils.tools import association_product,build_contact_map, add_sphere_residu
 import plotly.graph_objects as go
 from pathlib import Path
 from os import path
+import os
 from typing import Callable, Any, Union, Optional, List, Tuple, Dict
-from operator import itemgetter
 import numpy as np
 import logging
+import pandas as pd
+from Bio.PDB import Structure, Model, Chain
+from Bio.PDB.PDBParser import PDBParser
+from Bio.PDB.PDBIO import PDBIO
+from Bio.PDB import Chain, Residue, Atom
+from Bio.PDB.mmcifio import MMCIFIO
+from Bio.PDB.Superimposer import Superimposer
 
 log = logging.getLogger("CRSProtein")
 
@@ -36,16 +43,19 @@ class Graph:
             dssp_config=DSSPConfig(),
             granularity="centroids"
         )
+        self.graph_path = graph_path
         self.graph = construct_graph(config=self.config, path=graph_path)
         self.subgraphs: Dict[str, nx.Graph] = {}
+        self.depth: pd.DataFrame
 
     def get_subgraph(self, name:str):
         if name not in self.subgraphs.keys():
             print(f"Can't find {name} in subgraph")
+            return None
         else:
             return self.subgraphs[name]
     
-    def create_subgraph(self, name: str, node_list: list = [], return_node_list: bool = False, **args):
+    def create_subgraph(self, name: str, node_list: List = [], return_node_list: bool = False, **args):
         if name in self.subgraphs.keys():
             print(f"You already have this subgraph created. Use graph.delete_subraph({name}) before creating it again.")
         elif not node_list:
@@ -65,9 +75,9 @@ class Graph:
 
     def filter_subgraph(self, 
             subgraph_name: str,
-            filter_func: Union[Callable[..., Any], str],
+            filter_func: Callable[..., Any],
             name: Union[str, None] = None, 
-            return_node_list: bool = False):
+            return_node_list: bool = False) -> Union[None, List]:
            
         nodes = [i for i in self.subgraphs[subgraph_name].nodes if filter_func(i)]
         if name:
@@ -76,7 +86,9 @@ class Graph:
             self.subgraphs[subgraph_name] = self.subgraphs[subgraph_name].subgraph(nodes)
         
         if return_node_list:
-            return self.subgraphs[name].nodes if name != None else self.subgraphs[subgraph_name].nodes
+            return list(self.subgraphs[name].nodes) if name is not None else list(self.subgraphs[subgraph_name].nodes)
+
+        return None
 
     def join_subgraph(self, name: str, graphs_name: list, return_node_list: bool = False):
         if name in self.subgraphs.keys():
@@ -87,7 +99,7 @@ class Graph:
             if return_node_list:
                 return self.subgraphs[name].nodes
         else:
-            print(f"Some of your subgraph isn't in the subgraph list")
+            print("Some of your subgraph isn't in the subgraph list")
 
 class AssociatedGraph:
     """Handles the association of multiple protein graphs."""
@@ -116,6 +128,7 @@ class AssociatedGraph:
                 - angle_diff (float)
                 - checks (dict)
                 - factors_path (str or None)
+                - residues_path (str or None)
         """
         default_config = {
             "centroid_threshold": 10.0,
@@ -123,6 +136,9 @@ class AssociatedGraph:
             "rsa_similarity_threshold": 0.95,
             "depth_similarity_threshold": 0.95,
             "residues_similarity_cutoff": 0.95,
+            "rsa_bins": 5.0,
+            "depth_bins": 5.0,
+            "distance_bins": 5.0, 
             "angle_diff": 20.0,
             "checks": {"neighbors": True, "rsa": True, "depth": True},
             "factors_path": None
@@ -155,23 +171,173 @@ class AssociatedGraph:
             - "contact_map": Output of build_contact_map(raw)[0].
             - "residue_map_all": Output of build_contact_map(raw)[2].
             - "rsa": np.array(g.graph["dssp_df"]["rsa"]).
-            - "residue_depth": g.residue_depth.
+            - "depth": g.depth.
         """
         graph_data = []
-        for g, raw in self.graphs:
-            contact_map, residue_map, residue_map_all = build_contact_map(raw)
+        for i, (g, pdb_file) in enumerate(self.graphs):
+            contact_map, residue_map, residue_map_all = build_contact_map(pdb_file)
+            
+            sorted_nodes = sorted(list(g.nodes()))
+            depth_nodes = [str(node.split(":")[2])+node.split(":")[0] for node in sorted_nodes]
+            
             data = {
+                "id": i,
                 "graph": g,
+                "sorted_nodes": sorted_nodes,
+                "depth_nodes": depth_nodes,
                 "contact_map": contact_map,
                 "residue_map": residue_map,
                 "residue_map_all": residue_map_all,
-                "rsa": np.array(g.graph["dssp_df"]["rsa"]),
-                # "residue_depth": g.residue_depth
+                "rsa": g.graph["dssp_df"]["rsa"],
+                "residue_depth": g.graph["depth"],
+                "pdb_file": pdb_file
             }
             graph_data.append(data)
+        
         return graph_data
     
-    
+
+    def create_pdb_per_protein(self):
+        if isinstance(self.associated_graphs, list):
+            for i in range(len(self.graphs)):
+                pdb_file = self.graphs[i][-1]
+                parser = PDBParser(QUIET=True)
+                orig_struct = parser.get_structure('orig', pdb_file)
+                chain_counter = 1
+                new_struct = Structure.Structure('frames')
+                model = Model.Model(0)
+                new_struct.add(model)
+
+                for comp_id, comps in enumerate(self.associated_graphs):
+                    for frame_id in range(len(comps[0])):
+                        nodes = set([node[i] for node in comps[0][frame_id].nodes])
+
+                        chain_id = f"K{comp_id}{chain_counter:03d}"
+                        chain_counter += 1
+                        chain = Chain.Chain(chain_id)
+
+                        for node in nodes:
+                            parts = node.split(':')
+                            chain_name = parts[0]
+                            resnum = int(parts[2])
+
+                            try:
+                                orig_res = orig_struct[0][chain_name][(" ", resnum, " ")]
+                            except KeyError:
+                                print(f"Resíduo {node} não encontrado, pulando.")
+                                continue
+
+                            new_res = Residue.Residue(orig_res.id, orig_res.resname, orig_res.segid)
+
+                            for atom in orig_res:
+                                new_atom = Atom.Atom(
+                                    atom.get_name(),
+                                    atom.get_coord().copy(),
+                                    atom.get_bfactor(),
+                                    atom.get_occupancy(),
+                                    atom.get_altloc(),
+                                    atom.get_fullname(),
+                                    atom.get_serial_number(),
+                                    element=atom.element
+                                )
+                                new_res.add(new_atom)
+                            # print(new_res)
+                            chain.add(new_res)
+
+                        model.add(chain)
+
+                # Salvar a estrutura
+                out_dir = Path("out")
+                out_dir.mkdir(exist_ok=True)
+                use_cif = True
+                if use_cif:
+                    io = MMCIFIO()
+                    # out_file = out_dir / f"{Path(pdb_file).stem}_frames.cif"
+                    out_file = f"{Path(pdb_file).stem}_frames.cif"
+                else:
+                    io = PDBIO()
+                    # out_file = out_dir / f"{Path(pdb_file).stem}_frames.pdb"
+                    out_file = f"{Path(pdb_file).stem}_frames.pdb"
+
+                io.set_structure(new_struct)
+                io.save(str(out_file))
+
+                print(f"Estrutura salva em {out_file}")
+
+
+    def _parse_label(self, label: str):
+        """
+        Dado 'A:GLU:154', retorna (chain_id, resnum, icode).
+        Seus nós não usam insertion code, então sempre icode = ' '.
+        """
+        chain, _, resnum = label.split(':')
+        return chain, int(resnum), ' '
+
+    def _write_frame_multimodel(self, comp_idx: int, frame_idx: int, models: list, output_dir: str):
+        """
+        Cria um único mmCIF multi-model contendo todos os modelos
+        (proteínas) já alinhados deste frame.
+        """
+        multi = Structure.Structure(f"comp{comp_idx}_frame{frame_idx}")
+        for m_idx, model in enumerate(models, start=1):
+            model.id = m_idx
+            multi.add(model)
+
+        os.makedirs(output_dir, exist_ok=True)
+        out_path = Path(output_dir) / f"comp{comp_idx}_frame{frame_idx}_all.cif"
+        io = MMCIFIO()
+        io.set_structure(multi)
+        io.save(str(out_path))
+        print(f"[comp{comp_idx}_frame{frame_idx}] wrote {len(models)} models to {out_path}")
+
+    def align_all_frames(self, output_dir: str):
+        """
+        Para cada componente (frame) em self.associated_graphs:
+          - recria fresh os modelos de cada PDB em self.graphs
+          - usa o modelo 0 como referência
+          - alinha cada proteína móvel de acordo com as tuplas de rótulos do nó
+          - salva um mmCIF multi-model com todos os modelos já alinhados
+        """
+        parser = PDBParser(QUIET=True)
+
+        for comp_idx, (frame_graphs, _) in enumerate(self.associated_graphs):
+            for frame_idx, assoc_graph in enumerate(frame_graphs):
+                nodes = list(assoc_graph.nodes())  # tuplas de rótulos, ex ('A:ALA:4','A:ALA:6',…)
+
+                # 1) carregar fresh cada Model para este frame
+                models = []
+                for prot_idx, (_, pdb_path) in enumerate(self.graphs):
+                    struct = parser.get_structure(f"p{prot_idx}", pdb_path)
+                    models.append(struct[0])
+
+                # 2) extrair lista de CA da referência (prot_idx=0)
+                ref_cas = []
+                for label in nodes:
+                    chain, resnum, icode = self._parse_label(label[0])
+                    ref_res = models[0][chain][(' ', resnum, icode)]
+                    ref_cas.append(ref_res['CA'])
+
+                # 3) para cada móvel (>0), extrair CA e superimpor
+                for prot_idx in range(1, len(models)):
+                    mob_cas = []
+                    for label in nodes:
+                        chain, resnum, icode = self._parse_label(label[prot_idx])
+                        mob_res = models[prot_idx][chain][(' ', resnum, icode)]
+                        mob_cas.append(mob_res['CA'])
+
+                    sup = Superimposer()
+                    sup.set_atoms(ref_cas, mob_cas)
+                    sup.apply(models[prot_idx].get_atoms())
+
+                    print(
+                        f"[comp{comp_idx}_frame{frame_idx}] "
+                        f"prot{prot_idx} ← prot0  RMSD={sup.rms:.2f}"
+                    )
+
+                # 4) salvar todos os modelos alinhados num único mmCIF multi-model
+                self._write_frame_multimodel(comp_idx, frame_idx, models, output_dir)
+
+
     def add_spheres(self):
         ...
         

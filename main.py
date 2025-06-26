@@ -7,7 +7,6 @@ from cli.cli_parser import parse_args
 from graph.graph import AssociatedGraph
 from utils.preprocessing import create_graphs
 
-
 def main():
     args = parse_args()
 
@@ -36,8 +35,14 @@ def main():
         "depth_similarity_threshold": args.depth_similarity_threshold,
         "residues_similarity_cutoff": args.residues_similarity_cutoff,
         "distance_diff_threshold": args.distance_diff_threshold,
+        "rsa_filter": args.rsa_filter,
+        "depth_filter": args.depth_filter,
+        "rsa_bins": args.rsa_bins,
+        "depth_bins": args.depth_bins,
+        "distance_bins": args.distance_bins,
         "checks": checks,
-        "factors_path": args.factors_path
+        "factors_path": args.factors_path,
+        "classes_path": args.classes_path
     }
 
     G = AssociatedGraph(
@@ -52,6 +57,9 @@ def main():
     if G.associated_graphs is None:
         return
 
+    G.create_pdb_per_protein()
+    G.align_all_frames(output_dir="out/frames_align")
+    input()
     log.debug("Drawing Graph")
     G.draw_graph(show=False, save=True)
 

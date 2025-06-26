@@ -3,6 +3,8 @@ import numpy
 import pandas as pd
 from typing import Dict, List, Optional
 
+from memory_profiler import profile
+
 
 class Surface(object):
 
@@ -84,7 +86,8 @@ class StructureSERD(object):
             The path to the PDB file.
         """
         self.atomic = read_pdb(path)
-
+    
+    @profile
     def model_surface(self, type: str = "SES", step: float = 0.6, probe: float = 1.4):
         """
         Model the surface of the structure using the atomic data.
@@ -125,7 +128,8 @@ class StructureSERD(object):
             step=self.surface.step,
             probe=self.surface.probe,
         )
-
+    
+    @profile
     def atom_depth(self) -> pd.DataFrame:
         """
         Calculate the depth of each atom in the structure. The atom radius is subtracted from the minimum distance to the surface.
@@ -165,7 +169,8 @@ class StructureSERD(object):
         data["AtomicDepth"] = atom_depth
 
         return data
-
+    
+    @profile
     def residue_depth(
         self,
         metric: str = "minimum",

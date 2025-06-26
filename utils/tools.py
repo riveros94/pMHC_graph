@@ -250,69 +250,6 @@ def compute_atom_distance(pdb_file, atom_name1, chain_id1, position1, atom_name2
     distance = atom1 - atom2
     return distance
 
-
-def generate_edges_old(nodes, distance_matrix, residue_maps_unique, graphs, angle_diff, check_angles):
-    """Make edges between associated nodes using dista
-    nce_matrix criteria and a filter of cross positions.
-    The edges are converted from indices associated nodes to residues associated nodes
-
-    Args:
-        nodes (List[Tuple]): A list of all possible associated nodes
-        distance_matrix (numpy.ndarray): A distance matrix of each residue in same protein
-        residue_maps_unique (dict): A dictionary that retrieve the residue from a given indice.
-        This dictionary has residues from all proteins with unique indice for each one
-
-    Returns:
-        edges (List[List[Tuple]]): A list of edges to make the associated graph
-    """
-    edges = []
-    # log.info(f"Making edges between nodes ({len(nodes)})")
-
-    nodes = np.array(nodes)
-    len_nodes = nodes.shape[0]
-  
-    log.info("Making combinations with filtering....")
-
-    nodes = np.ascontiguousarray(nodes, dtype=np.int64)
-    distance_matrix = np.ascontiguousarray(distance_matrix, dtype=np.float64)
-    
-    log.debug(f"Shape of nodes: {nodes.shape}")
-    log.debug(f"Shape of distance_matrix: {distance_matrix.shape}")
-    # Utilize a funcao em Cython para gerar as combinacoes e aplicar os filtros
-    # Gera combinações de edges com base na matriz de distância
-    edges_indices = filtered_combinations(nodes, distance_matrix)
-
-    # Converte as edges para formato de resíduos
-    edges_indices2, edges_residues = convert_edges_to_residues(edges_indices, residue_maps_unique)
-
-    map_residue_edge = {}
-    for edge_residue, edge_index in zip(edges_residues, edges_indices2):
-        if str(edge_residue) in map_residue_edge.keys():
-            print(f"I found edge duplicated: {edge_residue}")
-        map_residue_edge[edge_residue] = edge_index
-
-    temp_graph = create_graph(edges_residues)
-
-    if check_angles:
-        nodes_filtered_residues = filter_nodes_angle(G=temp_graph, graphs=graphs, angle_diff=angle_diff)
-        temp_graph.remove_nodes_from([node for node in temp_graph.nodes if node not in nodes_filtered_residues])
-
-    edges_filtered_residues = list(temp_graph.edges())
-    # log.debug(f"map_residue_edge: {map_residue_edge.keys()}")
-    # log.debug(f"Filtered edges: {edges_filtered_residues}")
-
-    edges_filtered_indices = []
-    for edge in edges_filtered_residues:
-        if (edge[0], edge[1]) in map_residue_edge.keys():
-            edges_filtered_indices.append(map_residue_edge[(edge[0], edge[1])])
-        elif (edge[1], edge[0]) in map_residue_edge.keys():
-            edges_filtered_indices.append(map_residue_edge[(edge[1], edge[0])])
-
-
-    log.info(f"Filtered combinations successfully made! Found {len(edges_filtered_residues)} / {len(edges_filtered_indices)} valid edges.")
-    
-    return edges_filtered_residues, edges_filtered_indices
-
 def convert_node_to_residue(node, residue_maps_unique: Dict):   
     converted_node = tuple(f"{residue_maps_unique[idx][0]}:{residue_maps_unique[idx][2]}:{residue_maps_unique[idx][1]}" for idx in node)
     
@@ -408,23 +345,18 @@ def filter_maps_by_nodes(data: dict,
     contact_maps = data["contact_maps"]
     rsa_maps = data["rsa_maps"]
     residue_maps = data["residue_maps"]
-    depths_maps = data["residue_maps"]
     nodes_graphs = data["nodes_graphs"]
+
     
     maps = {"full_residue_maps": [], "residue_maps_unique": {}}
     pruned_contact_maps = []
     thresholded_contact_maps = []
     thresholded_rsa_maps = []
-    thresholded_depth_maps = []
     
-    for contact_map, rsa_map, depth_map, residue_map, nodes in zip(
-            contact_maps, rsa_maps, depths_maps, residue_maps, nodes_graphs):
-        
-        # depth_map["ResidueNumber"] = depth_map["ResidueNumber"].astype(int)
-        # depth_map["Chain"] = depth_map["Chain"].astype(str)
-        
+    for contact_map, rsa_map, residue_map, nodes in zip(
+            contact_maps, rsa_maps, residue_maps, nodes_graphs):
+         
         indices = []
-        indices_depth = []
         
         for node in nodes:
             parts = node.split(":")
@@ -436,15 +368,7 @@ def filter_maps_by_nodes(data: dict,
             key = (chain, int(res_num_str), res_name)
             if key in residue_map:
                 indices.append(residue_map[key])
-                # indices_depth.append((int(res_num_str), chain))
-        
-        # for i, idx in enumerate(indices_depth):
-        #     residue_in_depth = depth_map[
-        #         (depth_map["ResidueNumber"] == idx[0]) & (depth_map["Chain"] == idx[1])
-        #     ]
-        #     if residue_in_depth.empty:
-        #         logger.warning(f"No matching residue in depth map for index {i}: {idx}")
-        
+       
         pruned_map = contact_map[np.ix_(indices, indices)]
         np.fill_diagonal(pruned_map, np.nan)
         pruned_contact_maps.append(pruned_map)
@@ -453,14 +377,9 @@ def filter_maps_by_nodes(data: dict,
         thresh_map[thresh_map >= distance_threshold] = np.nan
         thresholded_contact_maps.append(thresh_map)
         
+        # print(np.info(contact_map))
         thresholded_rsa_maps.append(rsa_map[indices])
-        
-        # filtered_depth = depth_map[
-        #     depth_map.apply(lambda row: (row["ResidueNumber"], row["Chain"]) in indices_depth, axis=1)
-        # ]
-        # filtered_depth = filtered_depth.set_index(["ResidueNumber", "Chain"]).reindex(indices_depth).reset_index()
-        # thresholded_depth_maps.append(filtered_depth["ResidueDepth"].to_numpy())
-        
+         
         full_res_map = {}
         for i, node in enumerate(nodes):
             parts = node.split(":")
@@ -556,20 +475,67 @@ def create_residues_factors(graphs: List, factors_path: str):
         residue_factors[i] = {node: calculate_atchley_average(node, read_emb) for node in nodes}     
     return residue_factors
 
-def discrete_distances(distance, n_divisions, threshold):
+def value_to_class(value, n_divisions, threshold, inverse=False, upper_bound = 100):
 
-    length_division = threshold / n_divisions
-    
-    if distance <= 0 or distance > threshold:
+    if not inverse:
+        if value <= 0 or value > threshold:
+            return None
+        span = threshold
+        rel = value
+    else:
+        if value < threshold:
+            return None
+
+        span = upper_bound - threshold
+        rel = value - threshold
+
+    length_division = span / n_divisions
+    class_name = math.ceil(rel / length_division) 
+     
+    return class_name
+
+def create_classes_bin(lenght, n_bins): 
+    length_division = lenght / n_bins
+
+    return  {
+            str(n): ((n-1)*length_division, n*length_division)
+            for n in range(n_bins)
+        }
+
+     
+def find_class(dictionary, value):
+    for key in dictionary.keys():
+        range_tuple = dictionary[key]
+        if range_tuple[0] < value <= range_tuple[1]:
+            return key
+    else:
         return None
 
-    class_distance = math.ceil(distance / length_division)
-    
-    
-    return class_distance
+def residue_to_tuple(res):
+    res_split = res.split(":")
+    return (res_split[0], int(res_split[2]), res_split[1])
 
-def find_triads(G, contact_map, residue_map, residues_classes, threshold):
+def find_triads(graph_data, association_mode, classes, config):
+    G = graph_data["graph"]
+    depth = graph_data["residue_depth"]
+    rsa = graph_data["rsa"]
+    contact_map = graph_data["contact_map"]
+    residue_map = graph_data["residue_map_all"]
+
     triads = {}
+    
+    if "residues" in classes.keys():
+        residue_classes = {
+            res: class_name
+            for class_name, residues in classes["residues"].items()
+            for res in residues
+        }
+    else:
+        residue_classes = None
+ 
+    rsa_classes = classes["rsa"] if "rsa" in classes.keys() else None 
+    depth_classes = classes["depth"] if "depth" in classes.keys() else None
+    distance_classes = classes["distance"] if "distance" in classes.keys() else None
 
     n_nodes = len(G.nodes())
     
@@ -579,31 +545,69 @@ def find_triads(G, contact_map, residue_map, residues_classes, threshold):
             outer_sorted = tuple(sorted([u, w]))
             u_split, center_split, w_split = outer_sorted[0].split(":"), center.split(":"), outer_sorted[1].split(":")
             u_res, center_res, w_res = u_split[1], center_split[1], w_split[1]
-            u_class, center_class, w_class = residues_classes[u_res], residues_classes[center_res], residues_classes[w_res] 
- 
-            u_tuple, center_tuple, w_tuple = (u_split[0], int(u_split[2]), u_split[1]), (center_split[0], int(center_split[2]), center_split[1]), (w_split[0], int(w_split[2]), w_split[1])
+
+            if residue_classes is not None and association_mode :
+                u_tuple, center_tuple, w_tuple = residue_classes[u_res], residue_classes[center_res], residue_classes[w_res] 
+            else:
+                u_tuple, center_tuple, w_tuple = residue_to_tuple(outer_sorted[0]), residue_to_tuple(center), residue_to_tuple(outer_sorted[1])
 
             u_index, center_index, w_index = residue_map[u_tuple], residue_map[center_tuple], residue_map[w_tuple]
+            
+            u_resChain = str(u_split[2]) + u_split[0] 
+            center_resChain = str(center_split[2]) + center_split[0] 
+            w_resChain = str(w_split[2]) + w_split[0] 
 
             d1 = contact_map[u_index, center_index]
             d2 = contact_map[u_index, w_index]
             d3 = contact_map[center_index, w_index]
-        
-            d1_discrete = discrete_distances(d1, 5, threshold)
-            d2_discrete = discrete_distances(d2, 10, 2*threshold)
-            d3_discrete = discrete_distances(d3, 5, threshold)
-            
-            if None not in [d1_discrete, d2_discrete, d3_discrete]:
-                triad = (u_res, center_res, w_res, d1_discrete, d2_discrete, d3_discrete)
+
+            rsa1 = rsa[outer_sorted[0]]*100
+            rsa2 = rsa[center]*100
+            rsa3 = rsa[outer_sorted[1]]*100
+
+            depth1 = depth.loc[depth["ResNumberChain"] == u_resChain]["ResidueDepth"].values[0]
+            depth2 = depth.loc[depth["ResNumberChain"] == center_resChain]["ResidueDepth"].values[0]
+            depth3 = depth.loc[depth["ResNumberChain"] == w_resChain]["ResidueDepth"].values[0]
+
+            if depth_classes is not None:
+                depth1_class = find_class(depth_classes, depth1)
+                depth2_class = find_class(depth_classes, depth2)
+                depth3_class = find_class(depth_classes, depth3)
+            else:
+                depth1_class = value_to_class(depth1, config["depth_bins"], config["depth_filter"])
+                depth2_class = value_to_class(depth2, config["depth_bins"], config["depth_filter"])
+                depth3_class = value_to_class(depth3, config["depth_bins"], config["depth_filter"])
+
+            if rsa_classes is not None:
+                rsa1_class = find_class(rsa_classes, rsa1)
+                rsa2_class = find_class(rsa_classes, rsa2)
+                rsa3_class = find_class(rsa_classes, rsa3)
+            else:
+                rsa1_class = value_to_class(rsa1, config["rsa_bins"], config["rsa_filter"]*100, inverse=True)
+                rsa2_class = value_to_class(rsa2, config["rsa_bins"], config["rsa_filter"]*100, inverse=True)
+                rsa3_class = value_to_class(rsa2, config["rsa_bins"], config["rsa_filter"]*100, inverse=True)
+             
+            if distance_classes is not None:
+                d1_class = find_class(distance_classes, d1) 
+                d2_class = find_class(distance_classes, d2)
+                d3_class = find_class(distance_classes, d3)
+            else:
+                d1_class = value_to_class(d1, config["distance_bins"], config["centroid_threshold"])
+                d2_class = value_to_class(d2, 2*config["distance_bins"], 2*config["centroid_threshold"])
+                d3_class = value_to_class(d3, config["distance_bins"], config["centroid_threshold"] )
+
+            full_describer = (depth1_class, depth2_class, depth3_class, rsa1_class, rsa2_class, rsa3_class, d1_class, d2_class, d3_class) 
+            if None not in full_describer:
+                triad = (u_res, center_res, w_res, *full_describer) 
                 if triad not in triads.keys():
                     triads[triad] = {
                         "count": 1,
-                        "triads_full": [(outer_sorted[0], center, outer_sorted[1], d1_discrete, d2_discrete, d3_discrete)]
+                        "triads_full": [(outer_sorted[0], center, outer_sorted[1], *full_describer)]
                     }
-                else:
-                    
+                else: 
                     triads[triad]["count"] += 1
-                    triads[triad]["triads_full"].append((outer_sorted[0], center, outer_sorted[1], d1_discrete, d2_discrete, d3_discrete))
+                    triads[triad]["triads_full"].append((outer_sorted[0], center, outer_sorted[1], *full_describer))
+
     n_triad = 0
     counters = {}
     for triad in triads.keys():
@@ -689,29 +693,44 @@ def cross_protein_triads(triads_per_protein):
 
 def tokens_compatible(t1, t2):
     """
-    (your existing compatibility check — unchanged)
+    Each token is (res1, res2, res3, dist12, dist13, dist23).
+    Returns True if exactly two residues are shared, both central residues
+    (t1[1] and t2[1]) are among those two, and their inter-residue distance matches.
     """
     (A, B, C, d1, d2, d3) = t1
     (X, Y, Z, e1, e2, e3) = t2
 
     cnt1 = Counter([A, B, C])
     cnt2 = Counter([X, Y, Z])
-    shared = cnt1 & cnt2
-    if sum(shared.values()) != 2:
+    shared = list((cnt1 & cnt2).elements())
+    if len(shared) != 2:
         return False
-    if shared[B] == 0 or shared[Y] == 0:
+    if B not in shared or Y not in shared:
         return False
 
     # distances must match on the shared pair
-    def pair_dist(a, b, d1, d2, d3):
-        key = tuple(sorted((a, b)))
-        return { tuple(sorted((A, B))): d1,
-                 tuple(sorted((A, C))): d2,
-                 tuple(sorted((B, C))): d3 }.get(key)
+    # def pair_dist(a, b, d1, d2, d3):
+    #     key = tuple(sorted((a, b)))
+    #     return { tuple(sorted((A, B))): d1,
+    #              tuple(sorted((A, C))): d2,
+    #              tuple(sorted((B, C))): d3 }.get(key)
 
-    shared_elems = list(shared.elements())
-    key = tuple(sorted(shared_elems))
-    return pair_dist(A, B, d1, d2, d3) == pair_dist(X, Y, e1, e2, e3)
+    def build_map(a, b, c, d1, d2, d3):
+        return {
+            frozenset((a, b)): d1,
+            frozenset((a, c)): d2,
+            frozenset((b, c)): d3,
+        }
+
+    map1 = build_map(A, B, C, d1, d2, d3)
+    map2 = build_map(X, Y, Z, e1, e2, e3)
+
+    key = frozenset(shared)
+    return map1.get(key) == map2.get(key)
+
+    # shared_elems = list(shared.elements())
+    # key = tuple(sorted(shared_elems))
+    # return pair_dist(A, B, d1, d2, d3) == pair_dist(X, Y, e1, e2, e3)
 
 def build_token_compatibility(cross_combos):
     """
@@ -732,17 +751,17 @@ def build_token_compatibility(cross_combos):
     token_patterns = {}
 
     for t in tokens:
-        A, B, C, d1, d2, d3 = t
+        A, B, C, _, _, _, _, _, _, d1, _, d3 = t
         pats = [
-            (A,    B,    None, d1, None, None),
-            (B,    A,    None, d1, None, None),
-            (None, A,    B,    None, None, d1),
-            (None, B,    A,    None, None, d1),
+            (A,    B,    None,  None,   None,   None,   None,   None,   None,   d1, None,   None),
+            (B,    A,    None,  None,   None,   None,   None,   None,   None,   d1, None,   None),
+            (None, A,    B,     None,   None,   None,   None,   None,   None,   None,   None,   d1),
+            (None, B,    A,     None,   None,   None,   None,   None,   None,   None,   None,   d1),
 
-            (C,    B,    None, d3, None, None),
-            (B,    C,    None, d3, None, None),
-            (None, B,    C,    None, None, d3),
-            (None, C,    B,    None, None, d3),
+            (C,    B,    None,  None,    None,  None,   None,   None,   None,   d3, None, None),
+            (B,    C,    None,  None,    None,  None,   None,   None,   None,   d3, None, None),
+            (None, B,    C,     None,    None,  None,   None,   None,   None,   None, None, d3),
+            (None, C,    B,     None,    None,  None,   None,   None,   None,   None, None, d3),
         ]
         token_patterns[t] = pats
         for p in pats:
@@ -753,7 +772,6 @@ def build_token_compatibility(cross_combos):
         candidates = set()
         for p in token_patterns[t1]:
             candidates |= pattern_map[p]
-        
         compat[t1] = [c for c in candidates if c != t1]
     return compat
 
@@ -772,9 +790,9 @@ def build_combos_graph(cross_combos):
 
     def shared_distance(tri, idx_pair):
         if idx_pair == (0,1):
-            return tri[3]
+            return tri[9]
         elif idx_pair == (1,2):
-            return tri[5]
+            return tri[11]
         else:
             raise AssertionError(f"Unexpected shared indices {idx_pair}, center must be shared")
 
@@ -803,6 +821,7 @@ def build_combos_graph(cross_combos):
 
                     idx1 = tuple(sorted(k for k,v in enumerate(tri1[:3]) if v in shared))
                     idx2 = tuple(sorted(k for k,v in enumerate(tri2[:3]) if v in shared))
+
                     if first_idx_pair is None:
                         first_idx_pair = (idx1, idx2)
 
@@ -832,9 +851,10 @@ def build_combos_graph(cross_combos):
                 
                 u1, c1, w1 = tuple(u1), tuple(c1), tuple(w1)
                 u2, c2, w2 = tuple(u2), tuple(c2), tuple(w2)
-    
                 for a, b in ((c1, u1), (c1, w1), (c2, u2), (c2, w2)):
                     if a == b:
+                        print(a, b)
+                        input()
                         continue
                     edge = tuple(sorted((a,b)))
                     edges.add(edge)
@@ -1100,30 +1120,45 @@ def create_std_matrix(nodes, matrices: dict, maps: dict, threshold: float = 3.0)
 def association_product(graph_data: list,
                         association_mode: str,
                         config: dict,
-                        debug: bool = True) -> Union[Dict, None]:
+                        debug: bool = True) -> Union[Dict[str, List], None]:
     logger = logging.getLogger("association.association_product")
-    checks = config.get("checks", {"neighbors": True, "rsa": True, "depth": True})
+    # checks = config.get("checks", {"neighbors": True, "rsa": True, "depth": True})
     
-    residues_classes = create_residues_classes('resources/atchley_aa.csv', config["residues_similarity_cutoff"])
+    # residues_classes = create_residues_classes('resources/atchley_aa.csv', config["residues_similarity_cutoff"])
+
+    if config["classes_path"] is not None:
+        with open(config["classes_path"], "r") as f:
+            classes = json.load(f)
+    else:
+        classes = {}
+
+    depths = []
+    for gd in graph_data:
+        df = gd["residue_depth"]
+        depth_dict = dict(zip(df["ResNumberChain"], df["ResidueDepth"]))
+        depths.append(
+            np.array([ depth_dict[node] for node in gd["depth_nodes"] ])
+        )
 
     graph_collection = {
         "graphs": [gd["graph"] for gd in graph_data],
-        "triads": [find_triads(gd["graph"], gd["contact_map"], gd["residue_map_all"], residues_classes, config["centroid_threshold"]) for gd in graph_data],
+        "triads": [find_triads(gd, association_mode, classes, config) for gd in graph_data],
         "contact_maps": [gd["contact_map"] for gd in graph_data],
         "residue_maps_all": [gd["residue_map_all"] for gd in graph_data],
         "rsa_maps": [gd["rsa"] for gd in graph_data],
-        # "depths_maps": [gd["residue_depth"] for gd in graph_data],
+        # "depth_maps": [gd["residue_depth"]["ResidueDepth"] for gd in graph_data],
         "nodes_graphs": [sorted(list(gd["graph"].nodes())) for gd in graph_data]
     }
-    
+
+    graph_collection["depths_maps"] = depths
+ 
     ranges_graph = indices_graphs(graph_collection["graphs"])
     total_length = sum(len(g.nodes()) for g in graph_collection["graphs"])
     metadata = {
         "total_length": total_length,
         "ranges_graph": ranges_graph
     }
- 
-    
+  
     matrices_dict = {
         "type": 0,
         "neighbors": None,
@@ -1137,12 +1172,11 @@ def association_product(graph_data: list,
         "metadata": metadata
     }
     
-    # Prepare filtering input; filter_maps_by_nodes now updates matrices_dict and returns maps.
     filter_input = {
         "contact_maps": graph_collection["contact_maps"],
         "rsa_maps": graph_collection["rsa_maps"],
         "residue_maps": graph_collection["residue_maps_all"],
-        # "depths_maps": graph_collection["depths_maps"],
+        "depths_maps": graph_collection["depths_maps"],
         "nodes_graphs": graph_collection["nodes_graphs"]
     }
     
@@ -1354,7 +1388,8 @@ def association_product(graph_data: list,
 
         if len(frames.keys()) > 1:
             Graphs.extend([(create_graph(frames, typeEdge="edges_residues", comp_id=comp_id), comp_id)])
-
+            print(Graphs)
+            input()
             comp_id += 1
 
  #    nodes = list(G.nodes())

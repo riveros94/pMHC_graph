@@ -10,42 +10,57 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Building common subgraphs")
     parser.add_argument('--folder_path', type=str, default=None,
                         help='Folder path with PDB input files.')
-    parser.add_argument('--residues_classes', type=str, default=None,
-                        help="File with the residues agrouped by classes.")
     parser.add_argument('--files_name', type=str, default=None,
                         help="PDB files separated by comma ','. If not provided, the system will ask for user to choose in menu")
     parser.add_argument('--reference_graph', type=str, default=None,
                         help="Reference Graph to be used.")
     parser.add_argument('--interface_list', type=str, default='',
                         help='File with a canonical list of MHC residues at the interface with TCR. No header needed for this file.')
-    parser.add_argument('--centroid_threshold', type=int, default=10,
-                        help="Distance threshold for building the molA and molB interface graphs")
     parser.add_argument('--run_name', type=str, default='test',
                         help='Name for storing results in the output folder')
     parser.add_argument('--association_mode', type=str, default='identity',
                         help='Mode for creating association nodes. Identify or similarity.')                                        
+
     parser.add_argument('--output_path', type=str, default='~/',
                         help='Path to store output results.')
-    parser.add_argument('--neighbor_similarity_cutoff', type=float, default=0.95,
-                        help="Threshold for neighbor's similarity ")
-    parser.add_argument('--residues_similarity_cutoff', type=float, default=0.95,
-                        help="Threshold for residue's similarity")
     parser.add_argument('--factors_path', type=str, default=None,
                         help="Factors for calculating the residue similarity ")
+    parser.add_argument('--classes_path', type=str, default=None,
+                        help="JSON File with the residues, RSA or depth agrouped by classes.")
+
+    parser.add_argument('--residues_lists', type=str, default=None,
+                        help="Path to Json file which contains the pdb residues")
+
     parser.add_argument('--rsa_filter', type=none_or_float, default=0.1,
                         help="Threshold for filter residues by RSA")
+    parser.add_argument('--depth_filter', type=none_or_float, default=10,
+                        help="Threshold for filter residues by Depth")
+
     parser.add_argument('--depth_similarity_threshold', type=float, default=0.95,
                         help="Threshold for make an associate graph using Depth similarity")
     parser.add_argument('--rsa_similarity_threshold', type=float, default=0.95,
                         help="Threshold for make an associate graph using RSA similarity")
     parser.add_argument('--distance_diff_threshold', type=float, default=2.0,
                         help="Threshold for distance difference")
-    parser.add_argument('--residues_lists', type=str, default=None,
-                        help="Path to Json file which contains the pdb residues")
+    parser.add_argument('--neighbor_similarity_cutoff', type=float, default=0.95,
+                        help="Threshold for neighbor's similarity ")
+    parser.add_argument('--residues_similarity_cutoff', type=float, default=0.95,
+                        help="Threshold for residue's similarity")
+    parser.add_argument('--centroid_threshold', type=int, default=10,
+                        help="Distance threshold for building the molA and molB interface graphs")
+
+    parser.add_argument('--rsa_bins', type=int, default=5,
+                        help="The number of bins that the RSA will be equally dicretized")
+    parser.add_argument('--depth_bins', type=int, default=5,
+                        help="The number of bins that the depth will be equally discretized")
+    parser.add_argument('--distance_bins', type=int, default=5,
+                        help="The number of bins that the distance will be equally discretized")
+ 
     parser.add_argument('--serd_config', type=str, default=None,
                         help="Path to Json file which contains the SERD configuration" )
     parser.add_argument('--angle_diff', type=float, default=20.0,
                         help="Max angle difference to filter association graph's nodes")
+
     parser.add_argument('--check_angles', type=bool, default=True,
                         help="Check angles after make the final associated graph")
     parser.add_argument('--check_depth', type=bool, default=True,
@@ -54,6 +69,7 @@ def parse_args():
                         help="Check rsa similarity")
     parser.add_argument('--check_neighbors', type=bool, default=True,
                         help="Check neighbors similarity")    
+
     parser.add_argument('--debug', type=bool, default=False,
                         help="Activate debug mode")
     return parser.parse_args()
