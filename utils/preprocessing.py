@@ -37,7 +37,7 @@ def remove_water_from_pdb(source_file, dest_file):
         io.save(dest_file, select=NoWaterSelect())
         logger.debug(f"Saved cleaned PDB file: {dest_file}")
 
-@profile
+# @profile
 def get_exposed_residues(graph: Graph, rsa_filter=0.1, depth_filter=10, selection_params=None) -> nx.Graph:
     selection_params = selection_params or {}
     
@@ -109,7 +109,7 @@ def get_exposed_residues(graph: Graph, rsa_filter=0.1, depth_filter=10, selectio
     
     raise Exception("I didn't find any nodes that passes in your filter")        
 
-@profile
+# @profile
 def calculate_residue_depth(pdb_file_path, serd_config=None):
     default_config = {
         "vdw": None,

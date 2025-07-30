@@ -21,11 +21,8 @@ def main():
     checks = {
         "depth": args.check_depth,
         "rsa": args.check_rsa,
-        "angles": args.check_angles,
-        "neighbors": args.check_neighbors
     }
 
-    # graphs, reference_graph = create_graphs(args)
     graphs = create_graphs(args)
 
     association_config = {
@@ -56,12 +53,12 @@ def main():
 
     if G.associated_graphs is None:
         return
-
-    G.create_pdb_per_protein()
-    G.align_all_frames(output_dir="out/frames_align")
-    input()
+    
     log.debug("Drawing Graph")
     G.draw_graph(show=False, save=True)
+    G.create_pdb_per_protein()
+    G.align_all_frames()
+
 
     # log.debug("Growing Subgraph")
     # try:

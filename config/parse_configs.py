@@ -1,7 +1,7 @@
 from functools import partial
 from graphein.protein.config import ProteinGraphConfig
 from graphein.protein.edges.distance import add_distance_threshold
-from graphein.protein.features.nodes.dssp import rsa, secondary_structure
+from graphein.protein.features.nodes.dssp import asa, rsa, secondary_structure
 from graphein.protein.config import DSSPConfig
 import json
 

@@ -5,6 +5,15 @@ def none_or_float(value):
         return None
     return float(value)
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', '0'):
+        return False
+    raise argparse.ArgumentTypeError('Boolean value expected.')
+
 def parse_args():
     """Configura e retorna os argumentos CLI."""
     parser = argparse.ArgumentParser(description="Building common subgraphs")
@@ -46,7 +55,7 @@ def parse_args():
                         help="Threshold for neighbor's similarity ")
     parser.add_argument('--residues_similarity_cutoff', type=float, default=0.95,
                         help="Threshold for residue's similarity")
-    parser.add_argument('--centroid_threshold', type=int, default=10,
+    parser.add_argument('--centroid_threshold', type=float, default=8.5,
                         help="Distance threshold for building the molA and molB interface graphs")
 
     parser.add_argument('--rsa_bins', type=int, default=5,
@@ -61,15 +70,11 @@ def parse_args():
     parser.add_argument('--angle_diff', type=float, default=20.0,
                         help="Max angle difference to filter association graph's nodes")
 
-    parser.add_argument('--check_angles', type=bool, default=True,
-                        help="Check angles after make the final associated graph")
-    parser.add_argument('--check_depth', type=bool, default=True,
+    parser.add_argument('--check_depth', type=str2bool, default=True,
                         help="Check depth similarity")
-    parser.add_argument('--check_rsa', type=bool, default=True,
+    parser.add_argument('--check_rsa', type=str2bool, default=True,
                         help="Check rsa similarity")
-    parser.add_argument('--check_neighbors', type=bool, default=True,
-                        help="Check neighbors similarity")    
 
-    parser.add_argument('--debug', type=bool, default=False,
+    parser.add_argument('--debug', type=str2bool, default=False,
                         help="Activate debug mode")
     return parser.parse_args()

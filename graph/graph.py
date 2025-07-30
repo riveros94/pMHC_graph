@@ -247,17 +247,17 @@ class AssociatedGraph:
                         model.add(chain)
 
                 # Salvar a estrutura
-                out_dir = Path("out")
+                out_dir = self.output_path / "frames"
                 out_dir.mkdir(exist_ok=True)
                 use_cif = True
                 if use_cif:
                     io = MMCIFIO()
-                    # out_file = out_dir / f"{Path(pdb_file).stem}_frames.cif"
-                    out_file = f"{Path(pdb_file).stem}_frames.cif"
+                    out_file = out_dir / f"{Path(pdb_file).stem}_frames.cif"
+                    # out_file = f"{Path(pdb_file).stem}_frames.cif"
                 else:
                     io = PDBIO()
-                    # out_file = out_dir / f"{Path(pdb_file).stem}_frames.pdb"
-                    out_file = f"{Path(pdb_file).stem}_frames.pdb"
+                    out_file = out_dir / f"{Path(pdb_file).stem}_frames.pdb"
+                    # out_file = f"{Path(pdb_file).stem}_frames.pdb"
 
                 io.set_structure(new_struct)
                 io.save(str(out_file))
@@ -313,7 +313,7 @@ class AssociatedGraph:
         for prot_idx, prot_model in enumerate(models):
             for ch in prot_model:
                 new_chain = copy.deepcopy(ch)
-                # keep auth_asym_id compatible with old viewers
+
                 new_chain.id = f"{ch.id}{prot_idx}"
                 combo_model.add(new_chain)
 
@@ -325,7 +325,7 @@ class AssociatedGraph:
         print(f"[comp{comp_idx}_frame{frame_idx}] wrote {len(models)} proteins as "
             f"{len(combo_model)} chains to {out_path}")
 
-    def align_all_frames(self, output_dir: str):
+    def align_all_frames(self):
         """
         Para cada componente (frame) em self.associated_graphs:
           - recria fresh os modelos de cada PDB em self.graphs
@@ -337,22 +337,19 @@ class AssociatedGraph:
 
         for comp_idx, (frame_graphs, _) in enumerate(self.associated_graphs):
             for frame_idx, assoc_graph in enumerate(frame_graphs):
-                nodes = list(assoc_graph.nodes())  # tuplas de rótulos, ex ('A:ALA:4','A:ALA:6',…)
+                nodes = list(assoc_graph.nodes())
 
-                # 1) carregar fresh cada Model para este frame
                 models = []
                 for prot_idx, (_, pdb_path) in enumerate(self.graphs):
                     struct = parser.get_structure(f"p{prot_idx}", pdb_path)
                     models.append(struct[0])
 
-                # 2) extrair lista de CA da referência (prot_idx=0)
                 ref_cas = []
                 for label in nodes:
                     chain, resnum, icode = self._parse_label(label[0])
                     ref_res = models[0][chain][(' ', resnum, icode)]
                     ref_cas.append(ref_res['CA'])
 
-                # 3) para cada móvel (>0), extrair CA e superimpor
                 for prot_idx in range(1, len(models)):
                     mob_cas = []
                     for label in nodes:
@@ -369,8 +366,7 @@ class AssociatedGraph:
                         f"prot{prot_idx} ← prot0  RMSD={sup.rms:.2f}"
                     )
 
-                # 4) salvar todos os modelos alinhados num único mmCIF multi-model
-                # self._write_frame_multimodel(comp_idx, frame_idx, models, output_dir)
+                output_dir = self.output_path / "frames"
                 self._write_frame_multichain(comp_idx, frame_idx, models, output_dir)
 
 
