@@ -1,14 +1,11 @@
-import argparse
 import json
 import logging
 import os
 import sys
 from os import path
-
 from cli.cli_parser import parse_args
 from graph.graph import AssociatedGraph
 from utils.preprocessing import create_graphs
-
 
 def main():
     args = parse_args()
@@ -24,11 +21,9 @@ def main():
     checks = {
         "depth": args.check_depth,
         "rsa": args.check_rsa,
-        "angles": args.check_angles,
-        "neighbors": args.check_neighbors
     }
 
-    graphs, reference_graph = create_graphs(args)
+    graphs = create_graphs(args)
 
     association_config = {
         "centroid_threshold": args.centroid_threshold,
@@ -37,41 +32,55 @@ def main():
         "depth_similarity_threshold": args.depth_similarity_threshold,
         "residues_similarity_cutoff": args.residues_similarity_cutoff,
         "distance_diff_threshold": args.distance_diff_threshold,
-        "angle_diff": args.angle_diff,
+        "rsa_filter": args.rsa_filter,
+        "depth_filter": args.depth_filter,
+        "rsa_bins": args.rsa_bins,
+        "depth_bins": args.depth_bins,
+        "distance_bins": args.distance_bins,
         "checks": checks,
-        "factors_path": args.factors_path
+        "factors_path": args.factors_path,
+        "classes_path": args.classes_path
     }
 
     G = AssociatedGraph(
         graphs=graphs,
-        reference_graph=reference_graph,
         output_path=args.output_path,
         run_name=args.run_name,
         association_mode=args.association_mode,
         association_config=association_config
     )
 
-    if G.associated_graph is None:
+    if G.associated_graphs is None:
         return
-
+    
     log.debug("Drawing Graph")
-    G.draw_graph(show=True)
+    G.draw_graph(show=False, save=True)
+    G.create_pdb_per_protein()
+    G.align_all_frames()
 
-    log.debug("Growing Subgraph")
-    try:
-        G.grow_subgraph_bfs()
-    except Exception as e:
-        log.error(f"Unable to grow subgraphs with BFS. Error: {e}")
 
-    # Prepare and save the output graph data as JSON.
-    graph_data = {
-        "nodes": [str(node) for node in G.associated_graph.nodes],
-        "edges": [(str(u), str(v)) for u, v in G.associated_graph.edges],
-        "neighbors": {
-            str(node): [str(neighbor) for neighbor in G.associated_graph.neighbors(node)]
-            for node in G.associated_graph.nodes
-        }
-    }
+    # log.debug("Growing Subgraph")
+    # try:
+    #     G.grow_subgraph_bfs()
+    # except Exception as e:
+    #     log.error(f"Unable to grow subgraphs with BFS. Error: {e}")
+
+    graph_data = dict()
+    for j, comps in enumerate(G.associated_graphs):
+        graph_data[j] = {"comp": j, "frames": {}}
+        for i in range(len(comps[0])):
+            nodes = list(comps[0][i].nodes)
+            edges = list(comps[0][i].edges)
+            neighbors = {
+                str(node): [str(neighbor) for neighbor in comps[0][i].neighbors(node)]
+                for node in nodes     
+                }
+
+            graph_data[j]["frames"][i] = {
+                "nodes": nodes,
+                "edges": edges,
+                "neighbors": neighbors
+            }
 
     output_json = path.join(args.output_path, f"graph_{args.run_name}.json")
     with open(output_json, "w") as f:
