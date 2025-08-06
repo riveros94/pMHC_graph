@@ -87,7 +87,6 @@ class StructureSERD(object):
         """
         self.atomic = read_pdb(path)
     
-    @profile
     def model_surface(self, type: str = "SES", step: float = 0.6, probe: float = 1.4):
         """
         Model the surface of the structure using the atomic data.
@@ -129,7 +128,6 @@ class StructureSERD(object):
             probe=self.surface.probe,
         )
     
-    @profile
     def atom_depth(self) -> pd.DataFrame:
         """
         Calculate the depth of each atom in the structure. The atom radius is subtracted from the minimum distance to the surface.
@@ -170,7 +168,6 @@ class StructureSERD(object):
 
         return data
     
-    @profile
     def residue_depth(
         self,
         metric: str = "minimum",

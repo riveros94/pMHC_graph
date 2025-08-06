@@ -241,23 +241,19 @@ class AssociatedGraph:
                                     element=atom.element
                                 )
                                 new_res.add(new_atom)
-                            # print(new_res)
                             chain.add(new_res)
 
                         model.add(chain)
 
-                # Salvar a estrutura
                 out_dir = self.output_path / "frames"
                 out_dir.mkdir(exist_ok=True)
                 use_cif = True
                 if use_cif:
                     io = MMCIFIO()
                     out_file = out_dir / f"{Path(pdb_file).stem}_frames.cif"
-                    # out_file = f"{Path(pdb_file).stem}_frames.cif"
                 else:
                     io = PDBIO()
                     out_file = out_dir / f"{Path(pdb_file).stem}_frames.pdb"
-                    # out_file = f"{Path(pdb_file).stem}_frames.pdb"
 
                 io.set_structure(new_struct)
                 io.save(str(out_file))
@@ -272,23 +268,6 @@ class AssociatedGraph:
         """
         chain, _, resnum = label.split(':')
         return chain, int(resnum), ' '
-
-    # def _write_frame_multimodel(self, comp_idx: int, frame_idx: int, models: list, output_dir: str):
-    #     """
-    #     Cria um único mmCIF multi-model contendo todos os modelos
-    #     (proteínas) já alinhados deste frame.
-    #     """
-    #     multi = Structure.Structure(f"comp{comp_idx}_frame{frame_idx}")
-    #     for m_idx, model in enumerate(models, start=1):
-    #         model.id = m_idx
-    #         multi.add(model)
-
-    #     os.makedirs(output_dir, exist_ok=True)
-    #     out_path = Path(output_dir) / f"comp{comp_idx}_frame{frame_idx}_all.cif"
-    #     io = MMCIFIO()
-    #     io.set_structure(multi)
-    #     io.save(str(out_path))
-    #     print(f"[comp{comp_idx}_frame{frame_idx}] wrote {len(models)} models to {out_path}")
 
     def _write_frame_multichain(self, comp_idx: int, frame_idx: int,
                                 models: list, output_dir: str):
@@ -369,39 +348,6 @@ class AssociatedGraph:
                 output_dir = self.output_path / "frames"
                 self._write_frame_multichain(comp_idx, frame_idx, models, output_dir)
 
-
-    def add_spheres(self):
-        ...
-        
-  #   def draw_graph(self, show = True, save = True):
-  #       if not show and not save:
-  #           log.info("You are not saving or viewing the graph. Please leave at least one of the parameters as true.")
-  #           return 
-  #       if isinstance(self.associated_graphs, list):
-  #           for i, graph in enumerate(self.associated_graphs):
-
-  #               chain_ids = sorted({data['chain_id'] for _, data in graph.nodes(data=True)})
-  #               cmap = plt.cm.get_cmap('tab10', len(chain_ids))
-  #               palette = {cid: cmap(idx) for idx, cid in enumerate(chain_ids)}
-  #               node_colors = [palette[graph.nodes[n]['chain_id']] for n in graph.nodes]
-  #               # Draw the full cross-reactive subgraph
-  #               nx.draw(graph, with_labels=True, node_color=node_colors, node_size=50, font_size=6)
-  #               
-  #               if show:
-  #                   plt.show()
-  #               if save:
-  #                   if i == 0:
-  #                       plt.savefig(path.join(self.output_path, "Associated Graph Base.png"))
-  #                   else:
-
-  #                       plt.savefig(path.join(self.output_path, f"Associated Graph {i}.png"))
-  #                   plt.clf()
-  #       
-  #                   log.info(f"{i} GraphAssociated's plot saved in {self.output_path}")
-  #       else:
-  #           log.warning(f"I cant draw the graph because it's {self.associated_graphs}")
-  # 
-
     def draw_graph(self, show=False, save=True):
         if not show and not save:
             log.info("You are not saving or viewing the graph. Please leave at least one of the parameters as true.")
@@ -413,34 +359,26 @@ class AssociatedGraph:
 
         for j, comps in enumerate(self.associated_graphs):
             for i, graph in enumerate(comps[0]): 
-                # 1) Assign a chain_id to each node (hard‑coded example = "AAAA")
-                print(graph)
                 for node in graph.nodes():
-                    # if you want to compute from the residues, do something like:
                     residues = [r for r in node]  # flatten
                     chains = [r.split(':')[0] for r in residues]
                     graph.nodes[node]['chain_id'] = ''.join(chains)
 
-                # 2) Build color palette
                 chain_ids = sorted({data['chain_id'] for _, data in graph.nodes(data=True)})
                 cmap = plt.cm.get_cmap('tab10', len(chain_ids))
                 palette = {cid: cmap(idx) for idx, cid in enumerate(chain_ids)}
                 node_colors = [palette[graph.nodes[n]['chain_id']] for n in graph.nodes()]
 
-                # 3) Build the labels exactly as you asked:
                 node_labels = {}
                 for n in graph.nodes():
                     if isinstance(n, tuple) and n and isinstance(n[0], tuple):
                         combo1, combo2 = n
-                        # repr gives "('A:GLU:161', 'A:ARG:157', 'A:VAL:158')"
-                        # strip spaces so you get "('A:GLU:161','A:ARG:157','A:VAL:158')"
                         lab1 = repr(combo1).replace(" ", "")
                         lab2 = repr(combo2).replace(" ", "")
                         node_labels[n] = f"{lab1}{lab2}"
                     else:
                         node_labels[n] = str(n)
 
-                # 4) Draw it
                 nx.draw(
                     graph,
                     with_labels=True,
@@ -450,7 +388,6 @@ class AssociatedGraph:
                     font_size=6
                 )
 
-                # 5) Show/save
                 if show:
                     plt.show()
                 if save:
@@ -467,13 +404,12 @@ class AssociatedGraph:
                     log.info(f"{j}: {i}‑th associated graph saved to {full}")
 
     def grow_subgraph_bfs(self):
-        # Build all possible common TCR interface pMHC subgraphs centered at the peptide nodes 
         count_pep_nodes = 0
         G_sub = self.associated_graph
         for nodes in G_sub.nodes:
             if nodes[0].startswith('C') and nodes[1].startswith('C'): #i.e. peptide nodes
                 count_pep_nodes += 1
-                #print(nodes)
+
                 bfs_subgraph = create_subgraph_with_neighbors(self.graphs, G_sub, nodes, 20)
                 for nodes2 in bfs_subgraph.nodes:
                     if nodes2[0].startswith('A') and nodes2[1].startswith('A'):
@@ -482,7 +418,7 @@ class AssociatedGraph:
                         bfs_subgraph.nodes[nodes2]['chain_id'] = 'blue'
                     else:
                         bfs_subgraph.nodes[nodes2]['chain_id'] = None
-                #check whether nodes meet the requirements to be a TCR interface
+
                 number_peptide_nodes = len([i for i in bfs_subgraph.nodes if i[0].startswith('C')])
                 if bfs_subgraph.number_of_nodes() >= 14 and nx.diameter(bfs_subgraph) >= 3 and number_peptide_nodes >=3:
                     node_colors = [bfs_subgraph.nodes[node]['chain_id'] for node in bfs_subgraph.nodes]
@@ -490,16 +426,14 @@ class AssociatedGraph:
                     plt.savefig(path.join(self.output_path,f'plot_bfs_{nodes[0]}_{self.run_name}.png'))
                     plt.clf()
 
-                    #write PDB with the common subgraphs as spheres
                     get_node_names = list(bfs_subgraph.nodes())
                     list_node_names = []
                     for n in range(len(self.graphs)):
                         node_names = [i[n] for i in get_node_names]
                         list_node_names.append(node_names)
   
-                    #create PDB with spheres
                     add_sphere_residues(self.graphs, list_node_names, self.output_path, nodes[0])
-                    #add_sphere_residues(node_names_molB, path_protein2, path_protein2.split('.pdb')[0]+'_spheres.pdb')
+
                 else:
                     print(f"The subgraph centered at the {nodes[0]} node does not satisfies the requirements")
         if count_pep_nodes == 0:
