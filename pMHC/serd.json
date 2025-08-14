@@ -1,9 +1,0 @@
-{
-    "vdw": null,
-    "step": 0.6,
-    "probe": 5.0,
-    "type": "SES",
-    "keep_only_interface": false,
-    "ignore_backbone": false,
-    "metric": "minimum"
-}
