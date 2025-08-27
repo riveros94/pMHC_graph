@@ -1,9 +1,8 @@
-from graphein.protein.config import ProteinGraphConfig
-from graphein.protein.graphs import construct_graph
-from graphein.protein.edges.distance import add_distance_threshold
-from graphein.protein.features.nodes.dssp import rsa, secondary_structure
-from graphein.protein.config import DSSPConfig
-from graphein.protein.subgraphs import extract_subgraph
+from __future__ import annotations
+
+from core.config import GraphConfig, make_default_config
+from core.pipeline import build_graph_with_config
+from core.subgraphs import extract_subgraph
 from functools import partial
 from time import time
 import networkx as nx
@@ -13,7 +12,7 @@ import plotly.graph_objects as go
 from pathlib import Path
 from os import path
 import os
-from typing import Callable, Any, Union, Optional, List, Tuple, Dict
+from typing import TypedDict, Callable, Any, Union, Optional, List, Tuple, Dict
 import numpy as np
 import logging
 import pandas as pd
@@ -23,30 +22,57 @@ from Bio.PDB.PDBIO import PDBIO
 from Bio.PDB import Chain, Residue, Atom
 from Bio.PDB.mmcifio import MMCIFIO
 from Bio.PDB.Superimposer import Superimposer
+from pyvis.network import Network
 import copy
+
+
 log = logging.getLogger("CRSProtein")
 
+def _rgba_to_hex(rgba):
+    r, g, b, _ = rgba
+    return "#{:02x}{:02x}{:02x}".format(int(r*255), int(g*255), int(b*255))
+
+class GraphData(TypedDict):
+    id: int
+    graph: nx.Graph
+    sorted_nodes: list[str]
+    depth_nodes: list[str]
+    contact_map: np.ndarray
+    residue_map: dict
+    residue_map_all: dict
+    rsa: np.ndarray
+    residue_depth: list[float]  
+    pdb_file: str
 
 class Graph:
-    """Represents a protein structure graph."""
+    """Represents a protein structure graph (no external framework assumptions)."""
 
-    def __init__(self, graph_path: str, config: Optional[ProteinGraphConfig] = None):
+    def __init__(self, graph_path: str, config: Optional[GraphConfig] = None):
         """
-        Initialize a Graph instance.
-
-        :param graph_path: Path to the PDB file.
-        :param config: Custom configuration for the protein graph.
+        Parameters
+        ----------
+        graph_path : str
+            Path to a PDB or mmCIF file.
+        config : GraphConfig, optional
+            Unified graph configuration. If not provided, a sensible default is used.
         """
-        self.config = config or ProteinGraphConfig(
-            edge_construction_functions=[partial(add_distance_threshold, long_interaction_threshold=0, threshold=10.0)],
-            graph_metadata_functions=[rsa, secondary_structure],
-            dssp_config=DSSPConfig(),
-            granularity="centroids"
-        )
         self.graph_path = graph_path
-        self.graph = construct_graph(config=self.config, path=graph_path)
+        self.config = config or make_default_config(
+            centroid_threshold=8.5,
+            granularity="all_atoms",  # "all_atoms" | "backbone" | "side_chain" | "ca_only"
+            exclude_waters=False,
+        )
+
+        # Build the structure graph and keep only pickle-safe artifacts in G.graph
+        self.graph: nx.Graph = build_graph_with_config(pdb_path=graph_path, config=self.config)
+
+        # Convenience handles (optional; also pickle-safe)
         self.subgraphs: Dict[str, nx.Graph] = {}
-        self.depth: pd.DataFrame
+        self.pdb_df: Optional[pd.DataFrame] = self.graph.graph.get("pdb_df")
+        self.raw_pdb_df: Optional[pd.DataFrame] = self.graph.graph.get("raw_pdb_df")
+        self.rgroup_df: Optional[pd.DataFrame] = self.graph.graph.get("rgroup_df")
+        self.dssp_df: Optional[pd.DataFrame] = self.graph.graph.get("dssp_df")
+        self.depth: Optional[pd.DataFrame]
 
     def get_subgraph(self, name:str):
         if name not in self.subgraphs.keys():
@@ -109,7 +135,6 @@ class AssociatedGraph:
                 reference_graph: Optional[Union[str, int]] = None,
                 output_path: str = ".",
                 run_name: str = "",
-                association_mode: str = "identity",
                 association_config: Optional[Dict[str, Any]] = None):
         """
         Initialize an AssociatedGraph instance with a reduced configuration.
@@ -132,20 +157,19 @@ class AssociatedGraph:
         """
         default_config = {
             "centroid_threshold": 10.0,
-            "neighbor_similarity_cutoff": 0.95,
-            "rsa_similarity_threshold": 0.95,
-            "depth_similarity_threshold": 0.95,
-            "residues_similarity_cutoff": 0.95,
             "rsa_bins": 5.0,
             "depth_bins": 5.0,
             "distance_bins": 5.0, 
             "angle_diff": 20.0,
             "checks": {"neighbors": True, "rsa": True, "depth": True},
-            "factors_path": None
+            "factors_path": None,
+            "exclude_waters": True
         }
         self.association_config = default_config.copy()
         if association_config:
             self.association_config.update(association_config)
+
+        self.track_residues = self.association_config.get("track_residues", None)
         
         self.graphs = graphs
         self.reference_graph = reference_graph
@@ -155,7 +179,6 @@ class AssociatedGraph:
         self.graph_data = self._prepare_graph_data()
         
         result = association_product(graph_data=self.graph_data,
-                                    association_mode=association_mode,
                                     config=self.association_config)
         
         if result is not None:
@@ -164,7 +187,7 @@ class AssociatedGraph:
         else:
             self.associated_graphs = None
 
-    def _prepare_graph_data(self) -> List[dict]:
+    def _prepare_graph_data(self) -> List[GraphData]:
         """
         For each (Graph, raw) tuple, build a dictionary with the necessary data:
             - "graph": The Graph instance.
@@ -175,12 +198,12 @@ class AssociatedGraph:
         """
         graph_data = []
         for i, (g, pdb_file) in enumerate(self.graphs):
-            contact_map, residue_map, residue_map_all = build_contact_map(pdb_file)
-            
+            contact_map, residue_map, residue_map_all = build_contact_map(pdb_file, exclude_waters=self.association_config["exclude_waters"])
+          
             sorted_nodes = sorted(list(g.nodes()))
             depth_nodes = [str(node.split(":")[2])+node.split(":")[0] for node in sorted_nodes]
-            
-            data = {
+
+            data: GraphData = {
                 "id": i,
                 "graph": g,
                 "sorted_nodes": sorted_nodes,
@@ -347,6 +370,134 @@ class AssociatedGraph:
 
                 output_dir = self.output_path / "frames"
                 self._write_frame_multichain(comp_idx, frame_idx, models, output_dir)
+
+
+    def draw_graph_interactive(self, show=False, save=True):
+
+        if not show and not save:
+            log.info("You are not saving or viewing the graph. Please leave at least one of the parameters as true.")
+            return
+
+        if not isinstance(self.associated_graphs, list):
+            log.warning(f"I can't draw the graph because it's {self.associated_graphs!r}")
+            return
+
+        out_dir = Path(self.output_path)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        for j, comps in enumerate(self.associated_graphs):
+            for i, graph in enumerate(comps[0]):
+                if graph.number_of_nodes() == 0:
+                    log.warning(f"{j}:{i} graph has no nodes. Skipping.")
+                    continue
+
+                # chain_id per node
+                for node in graph.nodes():
+                    try:
+                        residues = [r for r in node]  # flatten tuples
+                    except TypeError:
+                        residues = [str(node)]
+                    chains = [str(r).split(':')[0] for r in residues]
+                    graph.nodes[node]['chain_id'] = ''.join(chains) or "?"
+
+                chain_ids = sorted({data.get('chain_id', '?') for _, data in graph.nodes(data=True)})
+                cmap = plt.cm.get_cmap('tab10', max(1, len(chain_ids)))
+                palette = {cid: _rgba_to_hex(cmap(idx)) for idx, cid in enumerate(chain_ids)}
+
+                # compact labels
+                node_labels = {}
+                for n in graph.nodes():
+                    if isinstance(n, tuple) and n and isinstance(n[0], tuple):
+                        combo1, combo2 = n
+                        lab1 = repr(combo1).replace(" ", "")
+                        lab2 = repr(combo2).replace(" ", "")
+                        node_labels[n] = f"({lab1})({lab2})"
+                    else:
+                        node_labels[n] = str(n)
+
+                # attach display attrs
+                for n in graph.nodes():
+                    cid = graph.nodes[n].get('chain_id', '?')
+                    graph.nodes[n]['label'] = node_labels[n]
+                    graph.nodes[n]['title'] = f"chain: {cid}\n{node_labels[n]}"
+                    graph.nodes[n]['color'] = palette.get(cid, "#999999")
+                    graph.nodes[n]['size'] = 12
+                    graph.nodes[n]['group'] = cid
+
+                # relabel nodes to safe string ids
+                safe_map = {n: f"v{idx}" for idx, n in enumerate(graph.nodes())}
+                H = nx.relabel_nodes(graph, safe_map, copy=True)
+
+                net = Network(
+                    height="800px",
+                    width="100%",
+                    bgcolor="#ffffff",
+                    notebook=False,
+                    cdn_resources="in_line",
+                    directed=graph.is_directed()
+                )
+                net.from_nx(H)
+
+                # optional edge hover with weight
+                for (u, v, data) in H.edges(data=True):
+                    w = data.get('weight')
+                    if w is not None:
+                        # PyVis stores edges in net.edges, update matching one
+                        # create a small title for hover
+                        title = f"weight: {w}"
+                        # there can be multiple edges, so update all matches
+                        for e in net.edges:
+                            if (e['from'] == u and e['to'] == v) or (not graph.is_directed() and e['from'] == v and e['to'] == u):
+                                e['title'] = title
+                                e.setdefault('value', float(w) if isinstance(w, (int, float)) else 1)
+
+                net.set_options("""
+                {
+                "nodes": { "shape": "dot" },
+                "interaction": { "hover": true, "tooltipDelay": 150, "zoomView": true, "dragView": true },
+                "physics": {
+                    "enabled": true,
+                    "solver": "barnesHut",
+                    "barnesHut": {
+                    "gravitationalConstant": -8000,
+                    "centralGravity": 0.3,
+                    "springLength": 95,
+                    "springConstant": 0.04,
+                    "damping": 0.09,
+                    "avoidOverlap": 0.1
+                    },
+                    "minVelocity": 0.75
+                }
+                }
+                """)
+
+                if save:
+                    if i == 0 and j == 0:
+                        filename = "Full Associated Graph Base.html"
+                    elif i == 0 and j != 0:
+                        filename = f"{j} - Associated Graph Base.html"
+                    else:
+                        filename = f"{j} - Associated Graph {i}.html"
+                    full = out_dir / filename
+                    html = net.generate_html(
+                        notebook=False,
+                        local=True
+                    )
+
+                    with open(str(full), "w+") as out:
+                        out.write(html)
+
+                    log.info(f"{j}: saved graph {i} to {full}")
+
+                elif show:
+                    tmpfile = out_dir / f"__preview_{j}_{i}.html"
+                    html = net.generate_html(
+                        notebook=False,
+                        local=True
+                    )
+
+                    with open(str(tmpfile), "w+") as out:
+                        out.write(html)
 
     def draw_graph(self, show=False, save=True):
         if not show and not save:

@@ -7,8 +7,19 @@ from cli.cli_parser import parse_args
 from graph.graph import AssociatedGraph
 from utils.preprocessing import create_graphs
 
+from core.tracking import init_tracker
+
+
 def main():
     args = parse_args()
+
+    init_tracker(
+        root="CrossSteps",
+        outdir=args.run_name,    
+        enabled=args.track_steps,      
+        prefer_npy_for_ndarray=True, 
+        add_timestamp_prefix=False
+    )
 
     logging.getLogger('matplotlib').setLevel(logging.ERROR)
     logging.basicConfig(
@@ -24,7 +35,7 @@ def main():
     }
 
     graphs = create_graphs(args)
-
+  
     association_config = {
         "centroid_threshold": args.centroid_threshold,
         "neighbor_similarity_cutoff": args.neighbor_similarity_cutoff,
@@ -39,14 +50,14 @@ def main():
         "distance_bins": args.distance_bins,
         "checks": checks,
         "factors_path": args.factors_path,
-        "classes_path": args.classes_path
+        "classes_path": args.classes_path,
+        "exclude_waters": args.exclude_waters,
     }
 
     G = AssociatedGraph(
         graphs=graphs,
         output_path=args.output_path,
         run_name=args.run_name,
-        association_mode=args.association_mode,
         association_config=association_config
     )
 
@@ -54,9 +65,10 @@ def main():
         return
     
     log.debug("Drawing Graph")
+    G.draw_graph_interactive(show=False, save=True)
     G.draw_graph(show=False, save=True)
-    G.create_pdb_per_protein()
-    G.align_all_frames()
+    # G.create_pdb_per_protein()
+    # G.align_all_frames()
 
 
     # log.debug("Growing Subgraph")

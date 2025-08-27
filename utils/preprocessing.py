@@ -3,17 +3,17 @@ import logging
 import json
 from pathlib import Path
 from io_utils.pdb_io import list_pdb_files, get_user_selection
-from config.parse_configs import make_graph_config
-from classes.classes import StructureSERD
+from SERD_Addon.classes import StructureSERD
 from collections import defaultdict
 from os import path
 from Bio import PDB
 import time
 import numpy as np
 import networkx as nx
-from typing import Tuple, Dict, List
-import matplotlib.pyplot as plt
+from typing import Tuple, List, Dict, Optional, Any, Union
 from memory_profiler import profile
+from core.config import make_default_config
+from core.tracking import save
 
 logger = logging.getLogger("Preprocessing")
 
@@ -37,7 +37,7 @@ def remove_water_from_pdb(source_file, dest_file):
         io.save(dest_file, select=NoWaterSelect())
         logger.debug(f"Saved cleaned PDB file: {dest_file}")
 
-def get_exposed_residues(graph: Graph, rsa_filter=0.1, depth_filter=10, selection_params=None) -> nx.Graph:
+def get_exposed_residues(graph: Graph, rsa_filter=0.1, depth_filter: Union[float, None]=10.0, selection_params=None) -> nx.Graph:
     selection_params = selection_params or {}
     
     if rsa_filter is None:
@@ -45,6 +45,7 @@ def get_exposed_residues(graph: Graph, rsa_filter=0.1, depth_filter=10, selectio
     else:
         graph.create_subgraph(name="exposed_residues", rsa_threshold=rsa_filter)
     
+    # print(f"Neighbors after rsa filter: {[node for node in graph.get_subgraph(name='exposed_residues').neighbors('C:ASP:4')]}")
     if not any(key in selection_params for key in ("chains", "residues")):
         expo = graph.get_subgraph(name="exposed_residues")
         if expo is not None:
@@ -72,12 +73,13 @@ def get_exposed_residues(graph: Graph, rsa_filter=0.1, depth_filter=10, selectio
                 logger.warning(f"Value for chain '{chain}' in residues must be a list. Received: {positions}")
                 raise ValueError("Invalid residues list")
             residue_positions.extend(positions)
-        
+
         graph.create_subgraph(name="all_residues", sequence_positions=residue_positions)
         merge_keys.append("all_residues")
     
     graph.join_subgraph(name="merge_list", graphs_name=merge_keys)
     
+
     exposed_nodes = graph.filter_subgraph(
         subgraph_name="exposed_residues",
         name="selected_exposed_residues",
@@ -149,65 +151,185 @@ def calculate_residue_depth(pdb_file_path, serd_config=None):
     
     return depth
 
+def _is_within(child: Path, parent: Path) -> bool:
+    """True se child está dentro de parent (ou igual)."""
+    try:
+        child.resolve().relative_to(parent.resolve())
+        return True
+    except Exception:
+        return False
+
+def _name_contains(fname: str, cond: Any) -> bool:
+    """Suporta string ou lista de strings para 'file_name_contains'."""
+    if cond is None:
+        return True
+    if isinstance(cond, str):
+        return cond in fname
+    try:
+        return any(s in fname for s in cond)
+    except Exception:
+        return False
+
+def _merge_constraints(base: Dict[str, Any], add: Dict[str, Any]) -> Dict[str, Any]:
+    """Une listas de cadeias e posições de resíduos."""
+    out: Dict[str, Any] = {"chains": [], "residues": {}}
+    for src in (base or {}, add or {}):
+        # chains
+        chains = src.get("chains") or []
+        out["chains"].extend([c for c in chains if c not in out["chains"]])
+        # residues
+        residues = src.get("residues") or {}
+        for ch, positions in residues.items():
+            lst = out["residues"].setdefault(ch, [])
+            for p in positions:
+                if p not in lst:
+                    lst.append(p)
+    return out
+
+def load_manifest(manifest_path: Optional[str]) -> Dict[str, Any]:
+    if not manifest_path:
+        return {}
+    with open(manifest_path, "r") as f:
+        data = json.load(f)
+
+    data.setdefault("inputs", [])
+    data.setdefault("constrains", {})
+    return data
+
+def resolve_selection_params_for_file(
+    file_path: Path, manifest: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Encontra e mescla todos os 'constrains' aplicáveis a file_path,
+    com base em regras definidas em manifest['inputs'].
+    """
+    if not manifest:
+        return {}
+
+    fname = file_path.name
+    fpath_str = str(file_path.resolve())
+    merged: Dict[str, Any] = {}
+
+    for rule in manifest.get("inputs", []):
+        paths: List[str] = rule.get("path") or []
+        hit_path = False
+        for p in paths:
+            p_obj = Path(p)
+            if any(ch in p for ch in "*?[]"): 
+                if fnmatch.fnmatch(fpath_str, str(p)):
+                    hit_path = True
+                    break
+            elif p_obj.exists() and p_obj.is_dir():
+                if _is_within(file_path, p_obj):
+                    hit_path = True
+                    break
+            else:
+                try:
+                    if file_path.resolve() == p_obj.resolve():
+                        hit_path = True
+                        break
+                except Exception:
+                    if str(p) in fpath_str:
+                        hit_path = True
+                        break
+
+        if not hit_path:
+            continue
+
+        for c in (rule.get("constrains") or []):
+            name = c.get("name")
+            if not name:
+                continue
+            if not _name_contains(fname, c.get("file_name_contains")):
+                continue
+            spec = manifest.get("constrains", {}).get(name, {})
+            merged = _merge_constraints(merged, spec)
+
+    return merged
+
+
+# ---------------------- create_graphs (mantendo sua seleção) ----------------------
 
 def create_graphs(args) -> List[Tuple]:
-    with open(args.residues_lists, "r") as f:
-        residues_data = json.load(f)
-    
+    # Load the manifest for dealing with files
+    manifest = load_manifest(getattr(args, "manifest", None))
+
     pdb_directory = args.folder_path
-    
     if not pdb_directory:
         raise Exception("You must provide the path for PDB folder")
-    
+
     if not args.files_name:
         pdb_files = list_pdb_files(pdb_directory)
-        
         selected_files = get_user_selection(pdb_files, pdb_directory)
+  
         selected_files = [
-            {"input_path": file_pair[0], "name": file_pair[1]} for file_pair in selected_files
+            {"input_path": pair[0], "name": pair[1]} for pair in selected_files
+        ]
+    else:
+        file_names = args.files_name.split(",")
+        selected_files = [
+            {"input_path": str(Path(pdb_directory) / fname), "name": fname}
+            for fname in file_names
         ]
 
-    else:
-        file_names = args.files_name.split(',')
-        selected_files = []
-
-        for fname in file_names:
-            file_info = {"input_path": path.join(pdb_directory, fname), "name": fname}
-            selected_files.append(file_info)
-
     Path(args.output_path).mkdir(parents=True, exist_ok=True)
-    graph_config = make_graph_config(centroid_threshold=args.centroid_threshold)
-    
-    graphs = []
+
+    graph_config = make_default_config(
+        centroid_threshold=args.centroid_threshold,
+        granularity=args.centroid_granularity,
+        exclude_waters=args.exclude_waters,
+    )
+
+    graphs: List[Tuple] = []
+    i = 1
     for file_info in selected_files:
-        cleaned_path = path.join(pdb_directory, file_info["name"].replace('.pdb', '_nOH.pdb'))
-        
-        remove_water_from_pdb(file_info["input_path"], cleaned_path)
-        file_info["input_path"] = cleaned_path
-        
-        graph_instance = Graph(config=graph_config, graph_path=file_info["input_path"])
-        print("Before calculating the Depth")    
-        start_time = time.time()
-        depth = calculate_residue_depth(pdb_file_path=file_info["input_path"], serd_config=args.serd_config)
-        logger.debug(f"Depth calculated in {time.time() - start_time} seconds") 
+        orig_path = Path(file_info["input_path"]).resolve()
+        graph_path: Path
 
-        depth["ResNumberChain"] = depth["ResidueNumber"].astype(str) + depth["Chain"]
+        if args.exclude_waters:
+            cleaned_name = file_info["name"]
+            if cleaned_name.endswith(".pdb.gz"):
+                cleaned_name = cleaned_name[:-7] + "_nOH.pdb"
+            elif cleaned_name.endswith(".pdb"):
+                cleaned_name = cleaned_name[:-4] + "_nOH.pdb"
+            else:
+                cleaned_name = cleaned_name + "_nOH.pdb"
+            cleaned_path = (Path(args.folder_path or ".") / cleaned_name).resolve()
+            remove_water_from_pdb(str(orig_path), str(cleaned_path))
+            graph_path = cleaned_path
+        else:
+            graph_path = orig_path
 
-        graph_instance.depth = depth
+        graph_instance = Graph(config=graph_config, graph_path=str(graph_path))
 
-        selection_params = residues_data.get(file_info["name"], {})
-        if "base" in selection_params:
-            selection_params = residues_data.get(selection_params["base"], {})
-        
+        if args.check_depth:
+            start_time = time.time()
+            depth = calculate_residue_depth(
+                pdb_file_path=str(graph_path),
+                serd_config=args.serd_config,
+            )
+            logger.debug(f"Depth calculated in {time.time() - start_time} seconds")
+            depth["ResNumberChain"] = depth["ResidueNumber"].astype(str) + depth["Chain"]
+            graph_instance.depth = depth
+        else:
+            args.depth_filter = None
+            depth = None
+
+        # Resolve constraints
+        selection_params = resolve_selection_params_for_file(orig_path, manifest)
+
+        # Extrai subgrafo (expostos + constraints resolvidos)
         subgraph = get_exposed_residues(
             graph=graph_instance,
             rsa_filter=args.rsa_filter,
             depth_filter=args.depth_filter,
-            selection_params=selection_params
+            selection_params=selection_params or {},  # sempre dict
         )
-        
+
         subgraph.graph["depth"] = depth
-         
-        graphs.append((subgraph, file_info["input_path"]))
-    
+
+        save("create_graphs", f"{graph_path.stem}_subgraph", subgraph)
+
+        graphs.append((subgraph, str(orig_path)))
+
     return graphs
