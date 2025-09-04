@@ -7,7 +7,7 @@ from Bio.PDB.vectors import Vector
 from Bio.PDB.Atom import Atom
 from Bio.PDB.Residue import Residue
 import networkx as nx
-from graphein.protein.edges.distance import compute_distmat
+# from graphein.protein.edges.distance import compute_distmat
 from os import path
 import pandas as pd
 from collections import Counter
@@ -15,8 +15,8 @@ from typing import Any, FrozenSet, Tuple, List, Optional, Union, Dict, Set
 import itertools
 import logging
 import matplotlib.pyplot as plt
-from utils.cutils.combinations_filter import filtered_combinations
-from SERD_Addon.classes import StructureSERD
+# from utils.cutils.combinations_filter import filtered_combinations
+# from SERD_Addon.classes import StructureSERD
 from itertools import combinations
 from sklearn.metrics.pairwise import cosine_similarity
 import json
@@ -137,7 +137,8 @@ def convert_edges_to_residues(edges: Set[FrozenSet], maps: Dict, debug: bool = F
             edges_indices.append((converted_node1_indice, converted_node2_indice))
             converted_edges.append((converted_node1, converted_node2))
         else:
-            if debug: log.debug(f'Invalid edge: {edge}, {converted_node1}:{converted_node2}')
+            # if debug: log.debug(f'Invalid edge: {edge}, {converted_node1}:{converted_node2}')
+            pass
     return original_edges, edges_indices, converted_edges
     
 def check_multiple_chains(node: Tuple, residue_maps_unique: Dict):
@@ -742,14 +743,7 @@ def association_product(graph_data: list,
     logger = logging.getLogger("association.association_product")
     
     checks = config.get("checks", {"rsa": True, "depth": True})
-
-    # residues_classes = create_residues_classes('resources/atchley_aa.csv', config["residues_similarity_cutoff"])
-
-    if config["classes_path"] is not None:
-        with open(config["classes_path"], "r") as f:
-            classes = json.load(f)
-    else:
-        classes = {}
+    classes = config.get("classes", {})
 
 
     depths = []
@@ -847,9 +841,9 @@ def association_product(graph_data: list,
     save("association_product", f"triad_graph", triad_graph)
     
     tuple_edges = [tuple(edge) for edge in triad_graph]
-    log.debug(f"Number of edges: {len(tuple_edges)}")
     G = nx.Graph()
     G.add_edges_from(tuple_edges)
+    log.debug(f"Number of Nodes: {len(G.nodes())} | Number of edges: {len(tuple_edges)}")
     components = list(nx.connected_components(G))
     save("comp_id_0", f"graph_associated_base", G)
     Graphs = [([G], 0)]
@@ -919,7 +913,722 @@ def association_product(graph_data: list,
             "AssociatedGraph": Graphs
         }
 
-def generate_frames(matrices, maps):
+def generate_frames(matrices, maps, *, debug=True, debug_every=5000):
+    """
+    Build frames by branching on coherent groups of the frontier.
+
+    dm  : coherence indicator (1 = coherent, else != 1 or NaN)
+    adj : adjacency indicator for edges (1 = edge, NaN on diagonal)
+
+    A branch is accepted when the induced subgraph (by adj) over the chosen
+    nodes has >= 4 edges and all nodes have degree > 1 within that subgraph.
+    """
+
+    dm_raw  = matrices["dm_possible_nodes"].copy()
+    adj_raw = matrices["adj_possible_nodes"].copy()
+    np.fill_diagonal(dm_raw, 1)
+    np.fill_diagonal(adj_raw, np.nan)
+
+    C = (dm_raw == 1)     # Matriz de coerência na forma booleana (os cálculos são mais rápidos)
+    A = (adj_raw == 1)    # Matriz de adjacência na forma booleana
+
+    np.fill_diagonal(C, True)
+    np.fill_diagonal(A, False)
+    K = A.shape[0]
+
+    N_adj = [np.nonzero(A[u])[0] for u in range(K)]  # Vizinhos por adjacência
+
+    frames = {}
+
+    # frame 0 base vetorizado
+    ii, jj = np.where(A)
+    m = ii < jj
+    edges_base = {frozenset((int(i), int(j))) for i, j in zip(ii[m], jj[m])}
+    _, edges_idx_0, edges_res_0 = convert_edges_to_residues(edges_base, maps)
+    frames[0] = {"edges_indices": edges_idx_0, "edges_residues": edges_res_0}
+
+
+    def frontier_for(chosen: np.ndarray, inter_mask: np.ndarray) -> tuple:
+        """
+        A função frontier_for constrói a nova fronteira a partir do conjunto de nós já escolhidos.
+        A ideia é a seguinte: dado um conjunto de nós escolhidos (chosen), buscamos todos os vizinhos 
+        imediatos desses nós no grafo de adjacência A. Porém, precisamos garantir duas coisas:
+            1) Nenhum nó que já foi escolhido pode voltar para a fronteira.
+            2) Apenas nós que permanecem coerentes com o inter_mask (máscara de coerência acumulada)
+            são mantidos na fronteira.
+        O resultado é retornado como uma tupla de índices inteiros representando os nós que formam a nova fronteira.
+        """
+        if chosen.size == 0:
+            # Se não há nós escolhidos, a fronteira é vazia
+            return ()
+        mask = A[chosen].any(axis=0)   # pega todos os vizinhos dos nós escolhidos
+        mask[chosen] = False           # remove os próprios escolhidos da fronteira
+        mask &= inter_mask             # mantém apenas nós ainda coerentes
+        return tuple(np.nonzero(mask)[0].tolist())  # retorna índices dos vizinhos coerentes
+
+
+    def valid_subgraph(nodes):
+        """
+        A função valid_subgraph verifica se um conjunto de nós forma um subgrafo válido.
+        As condições para validade são:
+            1) O subgrafo induzido deve ter pelo menos 4 arestas.
+            2) Todos os nós dentro do subgrafo devem ter grau > 1 (ou seja, sem nós pendurados).
+        Caso seja válido, retorna (True, es) onde 'es' é o conjunto de arestas representado por pares de nós.
+        Caso contrário, retorna (False, set()).
+        """
+        nodes = np.asarray(sorted(nodes), dtype=np.int32)  # ordena nós para consistência
+        sub = A[np.ix_(nodes, nodes)]  # submatriz de adjacência restrita aos nós escolhidos
+        deg = sub.sum(axis=1)          # grau de cada nó dentro do subgrafo
+
+        # Verifica se o número de arestas é suficiente (deg.sum() // 2 = nº de arestas)
+        if int(deg.sum() // 2) < 4:
+            return False, set()
+
+        # Verifica se todos os nós têm grau > 1
+        if np.any(deg <= 1):
+            return False, set()
+
+        # Extrai as arestas do subgrafo: usamos apenas a parte triangular superior para evitar duplicatas
+        ii, jj = np.where(np.triu(sub, 1))
+        es = {frozenset((int(nodes[i]), int(nodes[j]))) for i, j in zip(ii, jj)}
+
+        return True, es
+    
+    # Bron–Kerbosch com pivô, restrito à fronteira usando a matriz de coerência C
+    def maximal_cliques(frontier_set):
+        """
+        Dado um conjunto de nós da fronteira, queremos dividi-los em grupos
+        de nós que são todos coerentes entre si (cliques no grafo de coerência).
+        Para isso usamos o algoritmo clássico de Bron–Kerbosch com pivô,
+        aplicado no subgrafo de coerência induzido pela fronteira.
+        """
+
+        # Transformamos a fronteira (set) em array ordenado, para termos consistência.
+        F = np.array(sorted(frontier_set), dtype=np.int32)
+        if F.size == 0:
+            return []
+
+        # fmask marca quais nós fazem parte da fronteira dentro do universo total K
+        fmask = np.zeros(K, dtype=bool)
+        fmask[F] = True
+
+        # N é um dicionário de vizinhança no grafo de coerência restrito à fronteira:
+        # para cada nó u, guardamos apenas os vizinhos coerentes que também estão na fronteira.
+        N = {}
+        for u in F:
+            # nu = todos os nós coerentes com u (linha de C[u])
+            nu = np.flatnonzero(C[u])
+            # filtramos para manter só os que também estão na fronteira
+            nu = nu[fmask[nu]]
+            # salvamos como conjunto, excluindo o próprio u
+            N[int(u)] = set(int(x) for x in nu if x != u)
+
+        cliques = []
+
+        def bk(R, P, X):
+            """
+            Bron–Kerbosch recursivo:
+            - R = conjunto atual que estamos construindo (candidato a clique)
+            - P = candidatos que ainda podem entrar em R
+            - X = candidatos já explorados e que não podem mais entrar
+            Quando P e X ficam vazios ao mesmo tempo, R é um clique maximal.
+            """
+            if not P and not X:
+                # Encontramos um clique maximal
+                cliques.append(tuple(sorted(R)))
+                return
+
+            # Escolhemos um pivô (nó com maior vizinhança em N) para reduzir ramificações
+            U = P | X
+            pivot = max(U, key=lambda v: len(N[v])) if U else None
+
+            # Só vamos expandir pelos nós que NÃO são vizinhos do pivô
+            ext = P - (N[pivot] if pivot is not None else set())
+
+            for v in list(ext):
+                # Chamamos recursivamente adicionando v ao clique atual
+                bk(R | {v}, P & N[v], X & N[v])
+                # Após explorar v, movemos ele de P para X (já foi tratado)
+                P.remove(v)
+                X.add(v)
+
+        # Iniciamos Bron–Kerbosch com:
+        # - R vazio (nenhum nó escolhido ainda),
+        # - P = todos os nós da fronteira,
+        # - X vazio.
+        bk(set(), set(int(x) for x in F), set())
+
+        # Ordenamos os cliques encontrados: maiores primeiro
+        cliques.sort(key=lambda c: (-len(c), c))
+        return cliques
+
+
+    def mask_signature(mask_bool: np.ndarray) -> bytes:
+        # assinatura compacta da máscara boolean
+        return np.packbits(mask_bool, bitorder="little").tobytes()
+
+    # expansão unificada: não marca visited aqui
+    def expand_groups(chosen, inter_mask, frontier):
+        # Achar os grupos de nós coerentes em nossa fronteira é equivalente a converter a nossa fronteira
+        # Em um grafo de coerência e então procrurarmos o clique máximo nele
+        groups = maximal_cliques(frontier) if frontier else []
+        if not groups:
+            groups = tuple((v,) for v in sorted(frontier))
+        out = []
+        for grp in groups:
+            inter_g = inter_mask.copy()
+            for u in grp:
+                inter_g &= C[u]
+            chosen_g = tuple(sorted(set(chosen) | set(grp)))
+            frontier_g = frontier_for(np.asarray(chosen_g, dtype=np.int32), inter_g)
+            sig = (chosen_g, mask_signature(inter_g))
+            out.append((sig, chosen_g, inter_g, frontier_g))
+        return out
+
+    # ordem de nodes por grau
+    deg_all = A.sum(axis=1)
+    order_all = np.argsort(-deg_all)
+
+    seen_edge_sets    = set()   # chaves de arestas aceitas
+    visited_states    = set()   # (chosen_tuple, mask_signature)
+    checked_node_sets = set()   # frozenset(chosen)
+    next_frame_id     = 1
+
+    pushes = pops = accepts = 0
+    pruned_dupe_state = 0
+    max_depth = 0
+    debug = True
+    for node in order_all: # Percorremos os nós na ordem do maior grau para o menor grau
+        
+        inter = C[int(node)].copy() # Primeiro começamos pegando a linha de coerência que representa o nó e fazemos uma cópia dela (para não modificar o original)
+        accepted = (int(node),) # Iniciamos os nós que serão percorridos com o próprio nó inicial
+
+        neigh = N_adj[int(node)]
+        if neigh.size == 0:
+            continue
+
+        # filtra vizinhos pela coerência com o node
+        # inter[neigh] é bool; pega apenas índices coerentes
+        frontier_idx = neigh[inter[neigh]]
+        if frontier_idx.size == 0:
+            continue
+
+        frontier = set(int(v) for v in frontier_idx) # Lista da fronteira 
+
+        # Vamos criar um stack para realizar um busca em profundidade pelo LIFO (Last In First Out)
+        stack = []
+        stack_small = []
+
+        """
+        Sabemos que dado o nó raíz, nem todos os vizinhos são coerentes entre si, então precisamos separar a fronteira em grupos
+        de nós que sejam coerentes entre si. Porém, coerência NÃO é transitiva: um nó u pode ser coerente com w e com v, mas w e v
+        não serem coerentes entre si. Para cobrir TODAS as possibilidades válidas sem descartar combinações, construímos um “grafo
+        de coerência” sobre a fronteira (arestas indicam dm==1 entre pares de vizinhos) e buscamos cliques máximos nele — cada
+        clique representa um subconjunto de vizinhos mutualmente coerentes (par a par).
+        
+        A função expand_groups() encapsula exatamente isso: dado o conjunto 'accepted' (os nós já escolhidos), a máscara 'inter'
+        que representa os nós que permanecem coerentes com TODOS os escolhidos, e a 'frontier' atual (vizinhos no grafo de adjacência
+        que ainda sobreviveram na máscara), ela:
+          1) monta o grafo de coerência restrito à fronteira atual;
+          2) extrai cliques máximos (subgrupos de vizinhos mutuamente coerentes);
+          3) para cada clique, produz um próximo estado:
+             - 'chosen_g'  = accepted ∪ clique (isto é, avançamos escolhendo este subgrupo coerente);
+             - 'inter_g'   = inter multiplicado pelo dm de cada nó do clique (filtrando apenas nós coerentes com TODOS os escolhidos + clique);
+             - 'frontier_g'= união dos vizinhos de todos os nós em chosen_g, restrita a quem ainda sobrevive em 'inter_g' e que não está em chosen_g.
+        
+        O retorno é uma lista de assinaturas 'sig' para deduplicar estados (chosen, máscara, fronteira), e as tuplas (chosen_g, inter_g, frontier_g)
+        que formam os filhos do estado atual no backtracking. Dessa forma exploramos ramos por “pacotes coerentes”, sem eliminar à força toda a fronteira.
+        """
+        groups = expand_groups(accepted, inter, frontier)
+        # print(groups)
+        for sig, chosen_g, inter_g, frontier_g in groups:
+            # Evitamos revisitar exatamente o mesmo estado (mesmo conjunto escolhido, mesma máscara e mesma fronteira),
+            # o que previne ciclos e explosão desnecessária de busca.
+            if sig in visited_states:
+                pruned_dupe_state += 1
+                continue
+            visited_states.add(sig)
+
+            # Empilhamos o novo estado completo para exploração em profundidade.
+            # Guardamos também uma versão “resumida” (sem máscara) só para logs/depuração rápida.
+            stack.append((chosen_g, inter_g, frontier_g))
+            stack_small.append((chosen_g, frontier_g))
+            pushes += 1
+
+
+        # Log inicial para este nó-semente: quantos estados entraram na pilha e um snapshot compacto.
+        # log.debug(f"[node {int(node)}] inicializado com {len(stack)} stack | {stack_small}")
+
+        # Loop principal de busca em profundidade (DFS) sobre os estados empilhados.
+        while stack:
+            chosen_t, inter_m, frontier_t = stack.pop()
+            pops += 1
+            chosen = list(chosen_t)
+            frontier = set(frontier_t)
+
+            # 1) primeiro tenta expandir (gerar filhos)
+            children = []
+            groups_s = expand_groups(chosen_t, inter_m, frontier)
+
+            for sig, c_g, m_g, f_g in groups_s:
+                if sig in visited_states:
+                    pruned_dupe_state += 1
+                    continue
+                visited_states.add(sig)
+                children.append((c_g, m_g, f_g))
+
+            if children:
+                # ainda há filhos: empilha e segue a busca
+                stack.extend(children)
+                pushes += len(children)
+            else:
+                # 2) nó-folha: avaliamos aceitação do subgrafo
+                if len(chosen) >= 4:
+                    cn = frozenset(chosen)
+                    if cn not in checked_node_sets:
+                        checked_node_sets.add(cn)
+                        ok, es = valid_subgraph(chosen)
+                        if ok:
+                            # chave canônica das arestas: pares (u<v), conjunto não-ordenado
+                            edge_key = frozenset(tuple(sorted(e)) for e in es)
+                            if edge_key not in seen_edge_sets:
+                                seen_edge_sets.add(edge_key)
+                                _, edges_idx, edges_res = convert_edges_to_residues(es, maps, True)
+                                frames[next_frame_id] = {
+                                    "edges_indices": edges_idx,
+                                    "edges_residues": edges_res,
+                                }
+                                accepts += 1
+                                next_frame_id += 1
+
+            if debug and (pops % debug_every == 0):
+                log.debug(
+                    f"[progress] pops={pops:,} pushes={pushes:,} accepts={accepts:,} "
+                    f"visited={len(visited_states):,} checked={len(checked_node_sets):,} "
+                    f"pruned_dupe={pruned_dupe_state:,} stack={len(stack)}"
+                )
+
+
+    # -------- post-pass: keep maximal by edges (subset removal) --------
+    others = sorted(
+        (fid for fid in frames if fid != 0),
+        key=lambda fid: len(frames[fid]["edges_indices"]),
+        reverse=True
+    )
+    ordered = {0: {"edges_indices": [], "edges_residues": []}}
+    for new_id, old_id in enumerate(others, start=1):
+        ordered[new_id] = frames[old_id]
+
+    final_frames = {}
+    kept_edge_sets = []
+    fid_out = 0
+    for _, fr in ordered.items():
+        es = frozenset(map(tuple, fr["edges_indices"]))
+        if any(es.issubset(k) for k in kept_edge_sets):
+            continue
+        # drop strict subsets already kept
+        to_drop = [k for k in kept_edge_sets if k.issubset(es) and k != es]
+        if to_drop:
+            kept_edge_sets = [k for k in kept_edge_sets if k not in to_drop]
+        final_frames[fid_out] = fr
+        kept_edge_sets.append(es)
+        fid_out += 1
+
+    final_frames[0] = frames[0]
+
+    if debug:
+        log.debug(f"[done] frames_out={len(final_frames)} "
+                  f"(accepted_raw={len(others)}, kept_maximal={len(final_frames)-1})")
+
+    return final_frames
+
+def generate_frames_old(matrices, maps, *, debug=True, debug_every=5000):
+    """
+    Build frames by branching on *coherent groups* of the frontier.
+
+    dm  : coherence indicator (1 = coherent, else != 1 or NaN)
+    adj : adjacency indicator for edges (1 = edge, NaN on diagonal)
+
+    A branch is accepted when the induced subgraph (by adj) over the chosen
+    nodes has >= 4 edges and all nodes have degree > 1 within that subgraph.
+    """
+    import numpy as np
+    import logging
+
+    log = logging.getLogger("generate_frames")
+
+    dm  = matrices["dm_possible_nodes"].copy()
+    adj = matrices["adj_possible_nodes"].copy()
+    np.fill_diagonal(dm,  1)
+    np.fill_diagonal(adj, np.nan)
+    K = dm.shape[0]
+
+    # Fast boolean coherence adjacency (True iff dm==1)
+    coh = (dm == 1)
+
+    frames = {}
+
+    # -------- frame 0 (unchanged base) --------
+    edges_base = set()
+    for i in range(K):
+        js = np.where(adj[i] == 1)[0]
+        for j in js:
+            if i < j:
+                edges_base.add(frozenset((i, j)))
+    _, edges_idx_0, edges_res_0 = convert_edges_to_residues(edges_base, maps)
+    frames[0] = {"edges_indices": edges_idx_0, "edges_residues": edges_res_0}
+
+    # -------- helpers --------
+    def nbrs(u):
+        return np.where(adj[u] == 1)[0].astype(int)
+
+    def induced_edges(nodes):
+        nodes = np.array(sorted(nodes), dtype=int)
+        sub = adj[np.ix_(nodes, nodes)]
+        ii, jj = np.where(sub == 1)
+        edges = set()
+        for a, b in zip(ii, jj):
+            if a < b:
+                edges.add(frozenset((int(nodes[a]), int(nodes[b]))))
+        return edges
+
+    def valid_subgraph(nodes):
+        es = induced_edges(nodes)
+        if len(es) < 4:
+            return False, es
+        deg = {u: 0 for u in nodes}
+        for e in es:
+            u, v = tuple(e)
+            deg[u] += 1
+            deg[v] += 1
+        if any(d <= 1 for d in deg.values()):
+            return False, es
+        return True, es
+
+    # --- find maximal cliques (pairwise-coherent groups) in a frontier set ---
+    # Bron–Kerbosch with pivot; works on small frontiers efficiently.
+    def maximal_cliques(frontier_set):
+        # Build neighborhood dict within the frontier using coherence graph
+        F = list(sorted(frontier_set))
+        N = {u: set(int(v) for v in F if v != u and coh[u, v]) for u in F}
+
+        cliques = []
+        # BK(R,P,X)
+        def bk(R, P, X):
+            if not P and not X:
+                cliques.append(tuple(sorted(R)))
+                return
+            # pivot: choose a vertex with max neighbors in P∪X
+            if P or X:
+                U = P | X
+                pivot = max(U, key=lambda u: len(N[u])) if U else None
+                ext = P - (N[pivot] if pivot is not None else set())
+            else:
+                ext = set()
+            for v in list(ext):
+                bk(R | {v}, P & N[v], X & N[v])
+                P.remove(v)
+                X.add(v)
+
+        bk(set(), set(F), set())
+        # sort by size desc, then by node ids for determinism
+        cliques.sort(key=lambda c: (-len(c), c))
+        return cliques
+
+    # ---------- exhaustive branching over coherent groups ----------
+    # order nodes by global degree to reach dense regions first
+    deg_all = np.nan_to_num((adj == 1).astype(float)).sum(axis=1)
+    order_all = np.argsort(-deg_all)
+
+    seen_edge_sets = set()       # frozenset of edge tuples
+    visited_states = set()       # (chosen_tuple, mask_signature, frontier_tuple)
+    checked_node_sets = set()    # frozenset(chosen) → already evaluated acceptance
+    next_frame_id = 1
+
+    # counters for debug
+    pushes = pops = accepts = 0
+    pruned_dupe_state = 0
+
+    # quick signature for mask to avoid huge tuples: use bytes of a 0/1 mask
+    def mask_signature(mask):
+        # mask is float array with 1 or NaN → turn into uint8 1/0
+        b = np.where(mask == 1, 1, 0).astype(np.uint8).tobytes()
+        return b
+
+    for node in order_all:
+        # initial mask and frontier for the node
+        inter = dm[node].copy()  # coherent w.r.t. {node}
+        accepted = (node,)
+        frontier = set(int(v) for v in nbrs(node) if inter[v] == 1)
+
+        if not frontier:
+            continue
+
+        # split frontier into pairwise-coherent groups (maximal cliques)
+        groups = maximal_cliques(frontier)
+        print(node, groups)
+        if not groups:  # safety
+            groups = tuple((v,) for v in sorted(frontier))
+
+        # LIFO stack of states: (chosen_tuple, inter_mask, frontier_tuple)
+        stack = []
+        for grp in groups:
+            # combine masks for the whole group
+            inter_g = inter.copy()
+            for u in grp:
+                inter_g *= dm[u]
+            # new accepted and new frontier
+            chosen_g = tuple(sorted(set(accepted) | set(grp)))
+            print(f"Chosen g: {chosen_g}")
+            # only neighbors that still survive the mask
+            neigh = set()
+            for u in chosen_g:
+                neigh |= set(nbrs(u))
+                
+            frontier_g = tuple(sorted(int(w) for w in neigh if (inter_g[w] == 1 and w not in chosen_g)))
+            print(f"Frontier g: {frontier_g}")
+            sig = (chosen_g, mask_signature(inter_g), frontier_g)
+
+            print(f"Sig: {sig}")
+            if sig in visited_states:
+                pruned_dupe_state += 1
+                continue
+            visited_states.add(sig)
+            stack.append((chosen_g, inter_g, frontier_g))
+            pushes += 1
+            input()
+
+        if debug:
+            log.debug(f"[node {node}] groups={len(groups)} "
+                      f"(sizes: {','.join(str(len(g)) for g in groups[:8])}{'…' if len(groups)>8 else ''}) "
+                      f"stack={len(stack)}")
+
+        # DFS over branches
+        while stack:
+            try:
+                chosen_t, inter_m, frontier_t = stack.pop()
+            except:
+                print(stack[-1])
+                input()
+            pops += 1
+            chosen = list(chosen_t)
+            frontier = set(frontier_t)
+
+            # try to accept current chosen
+            if len(chosen) >= 4:
+                cn = frozenset(chosen)
+                if cn not in checked_node_sets:
+                    checked_node_sets.add(cn)
+                    ok, es = valid_subgraph(chosen)
+                    if ok:
+                        edge_key = frozenset(tuple(sorted(e)) for e in es)
+                        if edge_key not in seen_edge_sets:
+                            seen_edge_sets.add(edge_key)
+                            _, edges_idx, edges_res = convert_edges_to_residues(es, maps, True)
+                            frames[next_frame_id] = {
+                                "edges_indices": edges_idx,
+                                "edges_residues": edges_res,
+                            }
+                            accepts += 1
+                            next_frame_id += 1
+
+            if not frontier:
+                continue
+
+            # split current frontier into coherent groups again
+            groups = maximal_cliques(frontier)
+            if not groups:
+                groups = tuple((v,) for v in sorted(frontier))
+
+            for grp in groups:
+                # combine masks for this group
+                inter_g = inter_m.copy()
+                for u in grp:
+                    inter_g *= dm[u]
+                # new accepted and frontier
+                chosen_g = tuple(sorted(set(chosen) | set(grp)))
+                neigh = set()
+                for u in chosen_g:
+                    neigh |= set(nbrs(u))
+                frontier_g = tuple(sorted(int(w) for w in neigh if (inter_g[w] == 1 and w not in chosen_g)))
+
+                sig = (chosen_g, mask_signature(inter_g), frontier_g)
+                if sig in visited_states:
+                    pruned_dupe_state += 1
+                    continue
+                visited_states.add(sig)
+                stack.append((chosen_g, inter_g, frontier_g))
+                pushes += 1
+
+            if debug and (pops % debug_every == 0):
+                log.debug(
+                    f"[progress] pops={pops:,} pushes={pushes:,} accepts={accepts:,} "
+                    f"visited_states={len(visited_states):,} checked_sets={len(checked_node_sets):,} "
+                    f"pruned(dupe)={pruned_dupe_state:,} stack={len(stack)}"
+                )
+
+    # -------- post-pass: keep maximal by edges (subset removal) --------
+    others = sorted(
+        (fid for fid in frames if fid != 0),
+        key=lambda fid: len(frames[fid]["edges_indices"]),
+        reverse=True
+    )
+    ordered = {0: {"edges_indices": [], "edges_residues": []}}
+    for new_id, old_id in enumerate(others, start=1):
+        ordered[new_id] = frames[old_id]
+
+    final_frames = {}
+    kept_edge_sets = []
+    fid_out = 0
+    for _, fr in ordered.items():
+        es = frozenset(map(tuple, fr["edges_indices"]))
+        if any(es.issubset(k) for k in kept_edge_sets):
+            continue
+        # drop strict subsets already kept
+        to_drop = [k for k in kept_edge_sets if k.issubset(es) and k != es]
+        if to_drop:
+            kept_edge_sets = [k for k in kept_edge_sets if k not in to_drop]
+        final_frames[fid_out] = fr
+        kept_edge_sets.append(es)
+        fid_out += 1
+
+    final_frames[0] = frames[0]
+
+    if debug:
+        log.debug(f"[done] frames_out={len(final_frames)} "
+                  f"(accepted_raw={len(others)}, kept_maximal={len(final_frames)-1})")
+
+    return final_frames
+
+def generate_frames_old_old(matrices, maps):
+    """
+    Extrai frames de arestas a partir das matrizes filtradas,
+    usando convert_edges_to_residues para montar edges_indices e edges_residues.
+    """
+    dm  = matrices["dm_possible_nodes"].copy()
+    adj = matrices["adj_possible_nodes"].copy()
+    np.fill_diagonal(dm,  1)
+    np.fill_diagonal(adj, np.nan)
+    K = dm.shape[0]
+
+    frames = {}
+
+    edges_base = set()
+    for i in range(K):
+        js = np.where(adj[i] == 1)[0]
+        for j in js:
+            edges_base.add(frozenset((i, j)))
+
+    edges_original_0, edges_idx_0, edges_res_0 = convert_edges_to_residues(edges_base, maps)
+    frames[0] = {
+        "edges_indices": edges_idx_0,
+        "edges_residues": edges_res_0,
+    }
+
+    seen_edge_sets = set()
+    checked_node_sets = set()
+    k = 1
+
+    for i in range(K):
+        inter     = dm[i].copy()
+
+        accepted  = {i}
+        frontier  = set(np.where(adj[i] == 1)[0])
+
+        if not frontier:
+            continue
+        visited = set()
+
+        while frontier:
+            frontier -= visited
+            if not frontier:
+                break
+            for u in frontier:
+                inter *= dm[u] 
+
+            visited |= frontier
+            accepted |= frontier
+
+            next_layer = set()
+            for u in frontier:
+                nbrs = set(np.where(adj[u] == 1)[0])
+                next_layer |= nbrs
+            frontier = next_layer & set(np.where(inter == 1)[0])
+
+        inter_idx = np.where(inter == 1)[0]
+
+        if inter_idx.size < 4:
+            continue
+
+        node_set = frozenset(inter_idx)
+        if node_set in checked_node_sets:
+            continue
+        checked_node_sets.add(node_set)
+
+        nodes_idx = np.array(sorted(inter_idx), dtype=int)
+        sub_adj   = adj[np.ix_(nodes_idx, nodes_idx)]
+        degrees   = np.sum(np.nan_to_num(sub_adj), axis=1)
+        valid_mask = (degrees > 1)
+        
+        valid_nodes = nodes_idx[valid_mask]
+        filtered    = adj[np.ix_(valid_nodes, valid_nodes)]
+        
+        edges = {
+            frozenset((int(valid_nodes[p]), int(valid_nodes[q])))
+            for p, q in zip(*np.where(filtered == 1))
+        }
+        frame_edges = {e for e in edges}
+        if len(frame_edges) < 4:
+            continue
+
+        edge_key = frozenset(frame_edges)
+        if edge_key in seen_edge_sets:
+            continue
+        seen_edge_sets.add(edge_key)
+
+        _, edges_idx, edges_res = convert_edges_to_residues(frame_edges, maps, True)
+        frames[k] = {
+            "edges_indices": edges_idx,
+            "edges_residues": edges_res,
+        }
+        k += 1
+
+    others = sorted(
+        (fid for fid in frames if fid != 0),
+        key=lambda fid: len(frames[fid]["edges_indices"]),
+        reverse=True
+    )
+    ordered = {0: {"edges_indices": [], "edges_residues": []}}
+    for new_id, old_id in enumerate(others, start=1):
+        ordered[new_id] = frames[old_id]
+    
+    final_frames = {}
+    seen = []   
+    i = 0
+
+    for k, frame in ordered.items():
+        edges_set = frozenset(map(tuple, frame["edges_indices"]))
+
+        if any(edges_set.issubset(kept) for kept in seen):
+            continue
+
+        to_remove = [kept for kept in seen if kept.issubset(edges_set) and kept != edges_set]
+        for small in to_remove:
+            seen.remove(small)
+            for idx, f in list(final_frames.items()):
+                if frozenset(map(tuple, f["edges_indices"])) == small:
+                    logging.debug(f"Removing {final_frames[idx]} from {small}")
+                    del final_frames[idx]
+
+        seen.append(edges_set)
+        final_frames[i] = frame
+        i += 1
+    
+    final_frames[0] = frames[0]
+    
+    return final_frames
+
+def generate_frames_old_old_old(matrices, maps):
     """
     Extrai frames de arestas a partir das matrizes filtradas,
     usando convert_edges_to_residues para montar edges_indices e edges_residues.
@@ -1075,7 +1784,6 @@ def create_graph(edges_dict: Dict, typeEdge: str = "edges_indices", comp_id = 0)
                     if chain_id not in chain_color_map and chain_id[::-1] not in chain_color_map:
                         chain_color_map[chain_id] = color_palette(color_counter)[:3]
                         chain_color_map[chain_id[::-1]] = chain_color_map[chain_id]  # RGB tuple
-                        # log.debug(f"Chain_id: {chain_id}, color: {chain_color_map[chain_id]}")
                         color_counter += 1
 
                     G_sub.nodes[nodes]['chain_id'] = chain_color_map[chain_id]
@@ -1095,8 +1803,7 @@ def build_contact_map(
     exclude_waters: bool = True,
     atom_preference: Tuple[str, str] = ("CB", "CA"),
     water_atom_preference: Tuple[str, ...] = ("O", "OW", "OH2"),
-    fallback_any_atom: bool = True,
-) -> Tuple[np.ndarray, Dict[Tuple[str, int], int], Dict[Tuple[str, int, str], int]]:
+    fallback_any_atom: bool = True) -> Tuple[np.ndarray, Dict[Tuple[str, int], int], Dict[Tuple[str, int, str], int]]:
     """
     Build a residue–residue distance (contact) map using representative atoms.
 

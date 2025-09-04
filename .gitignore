@@ -1,9 +1,9 @@
+__pycache__/
 *.out
 *.pyc
 *.pdb
 *.png
 *.zip
-__pycache__/
 Analysis/*
 Analysis/
 Analysis/**/*

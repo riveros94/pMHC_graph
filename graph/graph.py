@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from core.config import GraphConfig, make_default_config
 from core.pipeline import build_graph_with_config
 from core.subgraphs import extract_subgraph
@@ -132,7 +133,6 @@ class AssociatedGraph:
     
     def __init__(self, 
                 graphs: List[Tuple],  
-                reference_graph: Optional[Union[str, int]] = None,
                 output_path: str = ".",
                 run_name: str = "",
                 association_config: Optional[Dict[str, Any]] = None):
@@ -155,24 +155,10 @@ class AssociatedGraph:
                 - factors_path (str or None)
                 - residues_path (str or None)
         """
-        default_config = {
-            "centroid_threshold": 10.0,
-            "rsa_bins": 5.0,
-            "depth_bins": 5.0,
-            "distance_bins": 5.0, 
-            "angle_diff": 20.0,
-            "checks": {"neighbors": True, "rsa": True, "depth": True},
-            "factors_path": None,
-            "exclude_waters": True
-        }
-        self.association_config = default_config.copy()
-        if association_config:
-            self.association_config.update(association_config)
-
+        self.association_config = association_config
         self.track_residues = self.association_config.get("track_residues", None)
         
         self.graphs = graphs
-        self.reference_graph = reference_graph
         self.output_path = Path(output_path)
         self.run_name = run_name
         
@@ -242,10 +228,18 @@ class AssociatedGraph:
                         for node in nodes:
                             parts = node.split(':')
                             chain_name = parts[0]
-                            resnum = int(parts[2])
+                            resnum = parts[2]
+                            if resnum.isdigit():
+                                    resnum = int(resnum)
+                                    icode = " "
+                            else:
+                                match = re.match(r"(\d+)([A-Za-z]?)$", resnum)
+                                if not match:
+                                    raise ValueError(f"Invalid residue resnum: {resnum}")
+                                resnum, icode = match.groups()
 
                             try:
-                                orig_res = orig_struct[0][chain_name][(" ", resnum, " ")]
+                                orig_res = orig_struct[0][chain_name][(" ", int(resnum), icode)]
                             except KeyError:
                                 print(f"Resíduo {node} não encontrado, pulando.")
                                 continue
@@ -290,7 +284,7 @@ class AssociatedGraph:
         Seus nós não usam insertion code, então sempre icode = ' '.
         """
         chain, _, resnum = label.split(':')
-        return chain, int(resnum), ' '
+        return chain, str(resnum), ' '
 
     def _write_frame_multichain(self, comp_idx: int, frame_idx: int,
                                 models: list, output_dir: str):
@@ -349,13 +343,27 @@ class AssociatedGraph:
                 ref_cas = []
                 for label in nodes:
                     chain, resnum, icode = self._parse_label(label[0])
-                    ref_res = models[0][chain][(' ', resnum, icode)]
+                    if resnum.isdigit():
+                        resnum = int(resnum)
+                    else:
+                        match = re.match(r"(\d+)([A-Za-z]?)$", resnum)
+                        if not match:
+                            raise ValueError(f"Invalid residue resnum: {resnum}")
+                        resnum, icode = match.groups()
+                    ref_res = models[0][chain][(' ', int(resnum), icode)]
                     ref_cas.append(ref_res['CA'])
 
                 for prot_idx in range(1, len(models)):
                     mob_cas = []
                     for label in nodes:
                         chain, resnum, icode = self._parse_label(label[prot_idx])
+                        if resnum.isdigit():
+                                resnum = int(resnum)
+                        else:
+                            match = re.match(r"(\d+)([A-Za-z]?)$", resnum)
+                            if not match:
+                                raise ValueError(f"Invalid residue resnum: {resnum}")
+                            resnum, icode = match.groups()
                         mob_res = models[prot_idx][chain][(' ', resnum, icode)]
                         mob_cas.append(mob_res['CA'])
 

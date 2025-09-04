@@ -278,6 +278,7 @@ class PDBGraphBuilder:
 
         if self.config.rsa_method == "dssp":
             model = self.structure[self.config.model_index]
+
             dssp = DSSP(
                 model,
                 self.pdb_path,
