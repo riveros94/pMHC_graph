@@ -1,13 +1,13 @@
 {
   "settings": {
-    "run_name": "hla_3",
-    "output_path": "data/pdb_all",
+    "run_name": "pdb_error",
+    "output_path": "data/pdb_error",
     "debug": true,
     "track_steps": false,
     "centroid_threshold": 10.0,
     "centroid_granularity": "ca_only",
     "exclude_waters": false,
-    "check_rsa": true,
+    "check_rsa": false,
     "check_depth": false,
     "rsa_filter": 0.1,
     "depth_filter": 10.0,
@@ -33,7 +33,7 @@
 
   "inputs": [
     {
-      "path": "/home/elementare/GithubProjects/pMHC_graph/Analysis/pdb_all",
+      "path": "/home/elementare/GithubProjects/pMHC_graph/Analysis/pdb_prob/",
       "enable_tui": false,
       "extensions": [".pdb", ".cif"],
       "constrains": [

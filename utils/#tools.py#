@@ -2,7 +2,7 @@ from core.tracking import save
 from Bio.PDB import *
 from collections import defaultdict
 import numpy as np
-from itertools import combinations, product
+from itertools import product
 from Bio.PDB.vectors import Vector
 from Bio.PDB.Atom import Atom
 from Bio.PDB.Residue import Residue
@@ -10,20 +10,21 @@ import networkx as nx
 import time
 # from graphein.protein.edges.distance import compute_distmat
 from os import path
-import pandas as pd
+impor
+t pandas as pd
 from collections import Counter
 from typing import Any, FrozenSet, Tuple, List, Optional, Union, Dict, Set, Iterable
+import itertools
 import logging
 import matplotlib.pyplot as plt
 # from utils.cutils.combinations_filter import filtered_combinations
 # from SERD_Addon.classes import StructureSERD
+from itertools import combinations, product
 from sklearn.metrics.pairwise import cosine_similarity
 import json
 import math
 from statistics import pstdev
 import bisect
-from utils.vis_tracer import TraversalTracer
-
 
 log = logging.getLogger("CRSProtein")
 
@@ -518,8 +519,8 @@ def find_triads(graph_data, classes, config, checks):
                 # Se qualquer distância não tem classe possível, não gera combinação
                 if d1_opts and d2_opts and d3_opts:
                     for d1_c, d2_c, d3_c in product(d1_opts, d2_opts, d3_opts):
-                        full_describer = (rsa1_class, rsa2_class, rsa3_class, d1_c, d2_c, d3_c)
-                        full_describer_absolute = (rsa1_class, rsa2_class, rsa3_class, d1, d2, d3)
+                        full_describer = (d1_c, d2_c, d3_c)
+                        full_describer_absolute = (d1, d2, d3)
                         triad = (u_res_class, center_res_class, w_res_class, *full_describer)
 
                         if triad not in triads:
@@ -663,8 +664,7 @@ def _range_ids(sorted_pairs, lo, hi):
     # coletar ids só do range
     return {sorted_pairs[j][1] for j in range(L, R)}
 
-
-def cross_protein_triads(triads_per_protein, diff, check_distances=True):
+def cross_protein_triads(triads_per_protein, diff):
     """
     triads_per_protein: lista de dicionários por proteína.
       Para um token t:
@@ -675,179 +675,87 @@ def cross_protein_triads(triads_per_protein, diff, check_distances=True):
     common_tokens = set.intersection(*(set(d.keys()) for d in triads_per_protein))
     cross = {"full": {}} 
     for token in common_tokens:
-        triads_len = [len(prot[token]["triads_full"]) for prot in triads_per_protein] if check_distances else [len(prot[token]) for prot in triads_per_protein] 
-        prod_triads = math.prod(triads_len)
-        if prod_triads > 5000: 
-            log.debug(f"Token: {token} | Quantidade em cada proteína: {triads_len} | Combinações totais teórica: {prod_triads}")
+        abs_lists_len = [len(prot[token]["triads_absolute_d1"]) for prot in triads_per_protein]   
+        print(f"Token: {token} | Tamanho cada proteína: {abs_lists_len} | {math.prod(abs_lists_len)}")
+    input() 
     for token in common_tokens:
-        if check_distances:
-            # obter listas absolutas por proteína para este token
-            abs_lists = [prot[token]["triads_absolute_d1"] for prot in triads_per_protein]
-            # construir índices por proteína
-            idxs = [_build_index(lst) for lst in abs_lists]
-            # print(f"idxs: {idxs}")
-            sizes = [len(x["records"]) for x in idxs]
-            if any(s == 0 for s in sizes):
-                continue  
+        # obter listas absolutas por proteína para este token
+        abs_lists = [prot[token]["triads_absolute_d1"] for prot in triads_per_protein]
+        # construir índices por proteína
+        idxs = [_build_index(lst) for lst in abs_lists]
+        # print(f"idxs: {idxs}")
+        sizes = [len(x["records"]) for x in idxs]
+        if any(s == 0 for s in sizes):
+            continue  
 
-            # escolher a proteína com menor lista como referência
-            ref_p = min(range(len(idxs)), key=lambda p: len(idxs[p]["records"]))
-            # print(f"Ref_p: {ref_p}")
-            ref_idx = idxs[ref_p]
-            # print(f"Ref_idx: {ref_idx}")
-            other_ps = [p for p in range(len(idxs)) if p != ref_p]
+        # escolher a proteína com menor lista como referência
+        ref_p = min(range(len(idxs)), key=lambda p: len(idxs[p]["records"]))
+        # print(f"Ref_p: {ref_p}")
+        ref_idx = idxs[ref_p]
+        # print(f"Ref_idx: {ref_idx}")
+        other_ps = [p for p in range(len(idxs)) if p != ref_p]
 
-            combos = []  # combinações completas para este token
+        combos = []  # combinações completas para este token
 
-            for ref_rec in ref_idx["records"]:
-                d1_ref, d2_ref, d3_ref = ref_rec[-3], ref_rec[-2], ref_rec[-1]
+        for ref_rec in ref_idx["records"]:
+            d1_ref, d2_ref, d3_ref = ref_rec[-3], ref_rec[-2], ref_rec[-1]
 
-                w1 = diff
-                w2 = 2 * diff
-                w3 = diff
+            w1 = diff
+            w2 = 2 * diff
+            w3 = diff
 
-                all_candidates = []
-                ok = True
-                for p in other_ps:
-                    idx = idxs[p]
-                    cand1 = _range_ids(idx["by_d1"], d1_ref - w1, d1_ref + w1)
+            all_candidates = []
+            ok = True
+            for p in other_ps:
+                idx = idxs[p]
+                cand1 = _range_ids(idx["by_d1"], d1_ref - w1, d1_ref + w1)
 
-                    if not cand1:
-                        ok = False
-                        break
-                    cand2 = _range_ids(idx["by_d2"], d2_ref - w2, d2_ref + w2)
+                if not cand1:
+                    ok = False
+                    break
+                cand2 = _range_ids(idx["by_d2"], d2_ref - w2, d2_ref + w2)
+                # print(f"cand2: {cand2}")
+                if not cand2:
+                    ok = False
+                    break
+                cand3 = _range_ids(idx["by_d3"], d3_ref - w3, d3_ref + w3)
+                # print(f"cand3: {cand3}")
+                if not cand3:
+                    ok = False
+                    break
 
-                    if not cand2:
-                        ok = False
-                        break
+                cands = cand1 & cand2 & cand3  # interseção 3D
+                if not cands:
+                    ok = False
+                    break
 
-                    cand3 = _range_ids(idx["by_d3"], d3_ref - w3, d3_ref + w3)
-                    if not cand3:
-                        ok = False
-                        break
+                
+                # materializar as tuplas absolutas
+                all_candidates.append([idx["records"][i] for i in cands])
+                # print(f"all_candidates: {all_candidates}")
+            # input()
+            if not ok:
+                continue
 
-                    cands = cand1 & cand2 & cand3
-                    if not cands:
-                        ok = False
-                        break
-     
-                    all_candidates.append([idx["records"][i] for i in cands])
-                if not ok:
-                    continue
+            for tail in product(*all_candidates):
+                if ref_p == 0:
+                    tup = (ref_rec, *tail)
+                else:
+                    # reconstruir na ordem original das proteínas
+                    tmp = [None] * len(idxs)
+                    tmp[ref_p] = ref_rec
+                    k = 0
+                    for p in other_ps:
+                        tmp[p] = tail[k]
+                        k += 1
+                    tup = tuple(tmp)
+                combos.append(tup)
 
-                for tail in product(*all_candidates):
-                    if ref_p == 0:
-                        tup = (ref_rec, *tail)
-                    else:
-                        # reconstruir na ordem original das proteínas
-                        tmp = [None] * len(idxs)
-                        tmp[ref_p] = ref_rec
-                        k = 0
-                        for p in other_ps:
-                            tmp[p] = tail[k]
-                            k += 1
-                        tup = tuple(tmp)
-                    combos.append(tup)
-        else:
-            list_triads_token = [prot[token] for prot in triads_per_protein]
-            combos_prod = product(*list_triads_token)
-            combos = [tuple(sum(inner, ())) for inner in combos_prod]
         cross["full"][token] = combos
 
     return cross
 
-def filter_cross_combos(
-    cross_combos: Dict,
-    graph_datas: List[Dict[str, Any]],
-    *,
-    distance_diff_threshold: float,
-    roles_to_check: Iterable[str] = ("UC", "CW"), 
-    offset: int = 0,
-) -> Dict[Tuple, List[Tuple[Tuple, ...]]]:
-    """
-    Mantém no combo apenas aqueles em que, para cada 'role' verificado,
-    (max(distâncias reais) - min(distâncias reais)) <= distance_diff_threshold.
-
-    cross_combos: saída do seu cross_protein_triads (token -> list[combo])
-    graph_datas:  lista de graph_data (um por proteína, na MESMA ordem usada no cross_combos)
-    """
-    roles_to_check = tuple(roles_to_check)
-    filtered: Dict[Tuple, List[Tuple[Tuple, ...]]]= {}
-    filtered_partial = {}
-    cross_combo_len = len(cross_combos["full"].keys())
-    compatible = build_token_compatibility(cross_combos["full"])
-
-    full_token = {}
-    ti = 1
-    # tok_len = "\n".join([f"{token} {len(combos)}" for token, combos in cross_combos["full"].items()])
-
-    for i, (token, combos) in enumerate(cross_combos["full"].items()):
-        if i % 100 == 0: 
-            print(f"Token: {ti}/{cross_combo_len} | Combos: {len(combos)}")
-
-        full_token[token] = {}
-        filtered_partial[token] = set()
-        full_partial_tokens = set()
-        ti += 1
-        kept = []
-        tc = 1
-        for combo in combos:
-            partial_tokens = []
-            ok = True
-            tc += 1
-            for role in roles_to_check:
-                _subtoken = []
-                vals = []
-                for k, tri_k in enumerate(combo):
-                    index_graph = k + offset
-                    a, b = pair_nodes_from_tri_full(tri_k, role)
-                    d = pair_distance_from_graph(a, b, graph_datas[index_graph])
-                    _subtoken.append((a, b))
-                    vals.append(d)
-
-                sigma = pstdev(vals) if len(vals) > 1 else 0.0
-                if sigma > distance_diff_threshold:
-                    ok = False
-                    break
-                partial_tokens.append(tuple(_subtoken))
-                
-            if ok: 
-                kept.append(combo)
-                full_token[token][combo] = partial_tokens
-                full_partial_tokens.union(set(partial_tokens))
-        if kept:
-            filtered[token] = kept
-            filtered_partial[token] = full_partial_tokens
-
-    ti = 1
-    for i, (token, combos) in enumerate(filtered.items()):
-        if i % 100 == 0:
-            print(f"[FILTERED] Token: {ti}/{cross_combo_len} | Combo: {len(combos)}")
-        compat_tokens = compatible[token]
-        partial_tokens = []
-        ti += 1
-        kept = []
-        tc = 1
-        for combo in combos:
-            ok = False
-            part_tokens = full_token[token][combo]
-            for part_token in part_tokens:
-                for compat_token in compat_tokens:
-                    if part_token in filtered_partial[compat_token]:
-                        ok = True
-                        break
-                if ok:
-                    break
-
-            if ok:
-                kept.append(combo)
-
-        if kept:
-            filtered[token] = kept
-
-    return filtered
-
-def filter_cross_combos_backup(
+def filter_cross_combos_by_distance_variation(
     cross_combos: Dict,
     graph_datas: List[Dict[str, Any]],
     *,
@@ -872,6 +780,7 @@ def filter_cross_combos_backup(
     tok_len = "\n".join([(token, len(combos)) for token, combos in cross_combos["full"].items()])
     print(tok_len)
 
+    input()
     for token, combos in cross_combos["full"].items():
         print(f"Token: {ti}/{cross_combo_len} | Combos: {len(combos)}")
         full_token[token] = {}
@@ -879,6 +788,7 @@ def filter_cross_combos_backup(
         full_partial_tokens = set()
         ti += 1
         kept = []
+        combos_len = len(combos)
         tc = 1
         for combo in combos:
             partial_tokens = []
@@ -907,6 +817,7 @@ def filter_cross_combos_backup(
         if kept:
             filtered[token] = kept
             filtered_partial[token] = full_partial_tokens
+    ttt = ("ALA", "GLU", "LYS", 5, 3, 4)
     # print(cross_combos["full"].keys())
     # print(f'Cross: {cross_combos["full"][ttt]}')
     # print(f'full token combo: {full_token[ttt]}')
@@ -938,6 +849,7 @@ def filter_cross_combos_backup(
             filtered[token] = kept
 
     return filtered
+
 
 def association_tokens_for_combo(
     combo: Tuple[Tuple, ...],
@@ -971,7 +883,9 @@ def index_filtered_combos_by_association(
                 assoc_index[atok].append(combo)
     return assoc_index
 
-def build_graph_from_filtered_combos(filtered_cross_combos: Dict[Tuple, List[Tuple[Tuple, ...]]]):
+def build_graph_from_filtered_combos(
+    filtered_cross_combos: Dict[Tuple, List[Tuple[Tuple, ...]]]
+) -> Set[Tuple[Tuple[str, ...], Tuple[str, ...]]]:
     """
     Para cada combo aprovado, cria as arestas (C,U) e (C,W) nos nós alinhados.
     Retorna um set de arestas entre nós-tupla (um rótulo por proteína).
@@ -979,35 +893,13 @@ def build_graph_from_filtered_combos(filtered_cross_combos: Dict[Tuple, List[Tup
     edges: Set[Tuple[Tuple[str, ...], Tuple[str, ...]]] = set()
     for _token, combos in filtered_cross_combos.items():
         for combo in combos:
-    
-            try:
-                U = tuple(tri[0] for tri in combo)
-            except Exception as e:
-                raise Exception(f"{e}\nCombo: {combo}")
-            C = tuple(tri[1] for tri in combo)
-            W = tuple(tri[2] for tri in combo)
-            edges.add(tuple(sorted((C, U))))
-            edges.add(tuple(sorted((C, W))))
-    return edges
-
-def rebuild_filtered_combos(filtered_cross_combos: Dict[Tuple, List[Tuple[Tuple, ...]]], graph_nodes):
-    filtered_cross_combos_new = {}
-    graph_nodes = set(graph_nodes)
-
-
-    for _token, combos in filtered_cross_combos.items():
-        keep = []
-        for combo in combos:
             U = tuple(tri[0] for tri in combo)
             C = tuple(tri[1] for tri in combo)
             W = tuple(tri[2] for tri in combo)
-            if {U, C, W} <= graph_nodes:
-                keep.append(combo)
-        if keep:
-            filtered_cross_combos_new[_token] = keep
-    return filtered_cross_combos_new
-
-    
+            # mesmas duas arestas que você já faz para uma tríade:
+            edges.add(tuple(sorted((C, U))))
+            edges.add(tuple(sorted((C, W))))
+    return edges
 
 
 def tokens_compatible(t1, t2):
@@ -1698,7 +1590,7 @@ def association_product(graph_data: list,
     
     checks = config.get("checks", {"rsa": True, "depth": True})
     classes = config.get("classes", {})
-    max_chunks = config.get("max_chunks", 5)
+
 
     depths = []
     if checks["depth"]:
@@ -1720,7 +1612,7 @@ def association_product(graph_data: list,
 
     graph_collection["depths_maps"] = depths
     
-    save("association_product", "graph_collection", graph_collection)
+    save("association_product", f"graph_collection", graph_collection)
     ranges_graph = indices_graphs(graph_collection["graphs"])
     total_length = sum(len(g.nodes()) for g in graph_collection["graphs"])
     metadata = {
@@ -1772,8 +1664,8 @@ def association_product(graph_data: list,
     dm_thresh = np.zeros((metadata["total_length"], metadata["total_length"]))
     dm_prune = np.zeros((metadata["total_length"], metadata["total_length"]))
 
-    save("association_product", "maps", maps)
-    save("association_product", "inv_maps", inv_maps)
+    save("association_product", f"maps", maps)
+    save("association_product", f"inv_maps", inv_maps)
 
     for i, graph in enumerate(graph_collection["graphs"]):
 
@@ -1783,189 +1675,121 @@ def association_product(graph_data: list,
         dm_prune[current_index:new_index, current_index:new_index] = matrices_dict["pruned_contact_maps"][i]
         current_index = new_index
 
-    save("association_product", "dm_thresh", dm_thresh)
-    save("association_product", "dm_prune", dm_prune)
+    save("association_product", f"dm_thresh", dm_thresh)
+    save("association_product", f"dm_prune", dm_prune)
     matrices_dict["dm_thresholded"] = dm_thresh
     matrices_dict["dm_pruned"] = dm_prune
 
-    log.debug("Criando cross combos")
+    log.debug(f"Criando cross combos")
     start_cross = time.perf_counter()
+    cross_combos = cross_protein_triads(graph_collection["triads"], 1.0)
+    end_cross = time.perf_counter()
+    log.debug(f"Took {end_cross - start_cross:.6f} seconds to create cross combos")
+    filtered_triads = filter_cross_combos_by_distance_variation(
+        cross_combos,
+        graph_data,
+        distance_diff_threshold=2,
+        roles_to_check=("UC","CW", "UW")       # recomendo começar com as que passam no centro
+    )
+    end_filtered = time.perf_counter()
+    log.debug(f"Cross Combos finalizado")
+    log.debug(f"Took {end_filtered - end_cross:.6f} seconds to Filter graphs")
+    # triad_graph = build_combos_graph(cross_combos)
+    # triad_graph = build_combos_graph_indexed(graph_collection["triads"])
+    triad_graph = build_graph_from_filtered_combos(filtered_triads)
+    log.debug(f"Graph finalizado")
 
-    Graphs = []
-    max_chunks = 5
-
-    qtd_graphs = len(graph_collection["graphs"])
-    n = qtd_graphs
-
-    passos = 0
-    while n > 1:
-        n = (n + max_chunks - 1) // max_chunks  
-        passos += 1
+    # save("association_product", f"cross_combos", cross_combos)
+    save("association_product", f"triad_graph", triad_graph)
     
-    filtered_cross_combos = []
-    for passo in range(1, passos+1):
-        log.debug(f"Executando o passo {passo}")
-        if passo == 1:
-            chunks_triads = [graph_collection["triads"][i:i+max_chunks] for i in range(0, qtd_graphs, max_chunks)]
-            # input(f"Chunks_triads: {len(chunks_triads)}")
-            cross_combos_list = [cross_protein_triads(chunk_triad, 1.0) for i, chunk_triad in enumerate(chunks_triads) if not print(f"Creating combo | Chunk: {i}")]
-            
-            # input(f"Cross_combos_list: {len(cross_combos_list)}")
-            filtered_combos_list = [filter_cross_combos(
-                    cross_combos,
-                    graph_data,
-                    distance_diff_threshold=2,
-                    roles_to_check=("UC","CW", "UW"),
-                    offset = i*max_chunks
-                    ) for i, cross_combos in enumerate(cross_combos_list) if not print(f"Filtering the combo | Chunk: {i}")]
-            # input(f"FIltered combos list: {len(filtered_combos_list)}")
+    tuple_edges = [tuple(edge) for edge in triad_graph]
+    # print(tuple_edges[0:20])
+    G = nx.Graph()
+    G.add_edges_from(tuple_edges)
+    log.debug(f"Number of Nodes: {len(G.nodes())} | Number of edges: {len(tuple_edges)}")
+    components = list(nx.connected_components(G))
+    # components = [component for component in components if len(component) > 3000]
+    save("comp_id_0", f"graph_associated_base", G)
+    Graphs = [([G], 0)]
+    # Graphs = []
+    comp_id = 1
+    processed_status = 1
+    maps["inv_maps"] = inv_maps
+    components_len = len(components)
+    start_frame = time.perf_counter()
+    for component in components:
+        len_component = len(component)
+        log.debug(f"{comp_id}: Processing component {processed_status} / {components_len} with {len_component} nodes")
+        processed_status += 1
+        if len_component <= 4: 
+            log.debug(f"{comp_id} Skipping component {processed_status-1}, because it has just {len_component} nodes")
+            continue
+        subG = nx.Graph()
+        subG.add_nodes_from(component)
+
+        for u in component:
+            for v in G.neighbors(u):
+                if v in component:
+                    subG.add_edge(u, v)
+
+        dm_thresh_graph = np.zeros((metadata["total_length"], metadata["total_length"]))
+        for u, v in subG.edges():
+            for p, (res_u, res_v) in enumerate(zip(u, v)):
+                if res_u != res_v:
+                    split_res_u, split_res_v = res_u.split(":"), res_v.split(":")
+                    res_u_tuple = (split_res_u[0], split_res_u[2], split_res_u[1])
+                    res_v_tuple = (split_res_v[0], split_res_v[2], split_res_v[1])
+                    idx_u = inv_maps[p][res_u_tuple]
+                    idx_v = inv_maps[p][res_v_tuple]
+                    dm_thresh_graph[idx_u, idx_v] = dm_thresh[idx_u, idx_v]
+                    dm_thresh_graph[idx_v, idx_u] = dm_thresh[idx_v, idx_u]
+
+        save(f"comp_id_{comp_id}", f"dm_thresh_graph", dm_thresh)
+        matrices_dict["dm_thresholded"] = dm_thresh_graph
+        # Graphs.extend([([subG], comp_id)])
+        # break
+        nodes = list(subG.nodes())
+        nodes_indices = []
+
+        for node in nodes:
+            node_converted = []
+            for k, res in enumerate(node):
+                res_split = res.split(":")
+                res_tuple = (res_split[0], res_split[2], res_split[1])
+                res_indice = inv_maps[k][res_tuple]
+                node_converted.append(res_indice)
+            nodes_indices.append(node_converted)
+
+        save(f"comp_id_{comp_id}", f"nodes_indices", nodes_indices)
+
+        matrices_mul, maps_mul = create_std_matrix(
+            nodes=nodes_indices,
+            matrices=matrices_dict,
+            maps=maps,
+            threshold=config["distance_diff_threshold"]
+        )
+
+        save(f"comp_id_{comp_id}", f"matrices_mul", matrices_mul)
+        save(f"comp_id_{comp_id}", f"maps_mul", maps_mul)
+
+        frames = generate_frames(
+            matrices=matrices_mul,
+            maps=maps_mul,
+        )
+
+        if len(frames.keys()) > 1:
+            Graphs.extend([(create_graph(frames, typeEdge="edges_residues", comp_id=comp_id), comp_id)])
+            comp_id += 1
         else:
-            if not filtered_cross_combos:
-                raise Exception("Filtered Cross Combos is empty")
-            qtd_graphs = len(filtered_cross_combos)
-            chunk_triads = [filtered_cross_combos[i:i+max_chunks] for i in range(0, qtd_graphs, max_chunks)]
-            filtered_combos_list = [cross_protein_triads(chunk_triad, 1.0, check_distances=False)["full"] for i, chunk_triad in enumerate(chunk_triads) if not print(f"Creating | Combo Chunk: {i}") ] 
-
-        triad_graph_list = [build_graph_from_filtered_combos(filtered_combos) for filtered_combos in filtered_combos_list]
-        tuple_edges_list = [[tuple(edge) for edge in triad_graph] for triad_graph in triad_graph_list]
-        Graphs_list = []
-        for i, tuple_edge in enumerate(tuple_edges_list):
-            G = nx.Graph()
-            G.add_edges_from(tuple_edge)
-
-            for comp in list(nx.connected_components(G)):
-                if len(comp) == 3:
-                    G.remove_nodes_from(comp)
-            Graphs_list.append((i, G))
-
-        components_list = [(G[0], list(nx.connected_components(G[1]))) for G in Graphs_list]
-
-        Graphs_frames = []
-        for comps_idx, components in components_list:
-            index_offset = comps_idx * (max_chunks**passo)
-            comp_id = 1
-            processed_status = 1
-            maps["inv_maps"] = inv_maps
-            components_len = len(components)
-            nodes_qtds = [len(comp) for comp in components]
-            start_frame = time.perf_counter()
-            G = Graphs_list[comps_idx][1]
-            Graphs = [([G], 0)]
-
-            Frames_comp = set()
-            # input(f"Quantidade de components: {components_len} | Tamanho cada comp: {nodes_qtds}")
-            for component in components:
-                len_component = len(component)
-                log.debug(f"{comp_id}: Processing component {processed_status} / {components_len} with {len_component} nodes")
-                processed_status += 1
-                if len_component <= 4: 
-                    log.debug(f"{comp_id} Skipping component {processed_status-1}, because it has just {len_component} nodes")
-                    continue
-                subG = nx.Graph()
-                subG.add_nodes_from(component)
-
-                for u in component:
-                    for v in G.neighbors(u):
-                        if v in component:
-                            subG.add_edge(u, v)
-
-                # if len(component) == 346:
-                #     input("Returning component 346")
-                #     return {
-                #         "AssociatedGraph": [([subG], 0)]
-                #     }
-
-                dm_thresh_graph = np.zeros((metadata["total_length"], metadata["total_length"]))
-                for u, v in subG.edges():
-                    for p, (res_u, res_v) in enumerate(zip(u, v)):
-                        if res_u != res_v:
-                            split_res_u, split_res_v = res_u.split(":"), res_v.split(":")
-                            res_u_tuple = (split_res_u[0], split_res_u[2], split_res_u[1])
-                            res_v_tuple = (split_res_v[0], split_res_v[2], split_res_v[1])
-                            idx_u = inv_maps[p+index_offset][res_u_tuple]
-                            try:
-                                idx_v = inv_maps[p+index_offset][res_v_tuple]
-                            except Exception as e:
-                                raise Exception(f"Problema na proteína {p}, offset: {index_offset}, v tuple: {res_v_tuple}, passo: {passo}, comps_idx: {comps_idx}, comp_id: {comp_id}\nError: {e}")
-                            dm_thresh_graph[idx_u, idx_v] = dm_thresh[idx_u, idx_v]
-                            dm_thresh_graph[idx_v, idx_u] = dm_thresh[idx_v, idx_u]
-
-                save(f"comp_id_{comp_id}", "dm_thresh_graph", dm_thresh)
-                matrices_dict["dm_thresholded"] = dm_thresh_graph
-
-                nodes = list(subG.nodes())
-                nodes_indices = []
-
-                for node in nodes:
-                    node_converted = []
-                    for k, res in enumerate(node):
-                        res_split = res.split(":")
-                        res_tuple = (res_split[0], res_split[2], res_split[1])
-                        res_indice = inv_maps[k+index_offset][res_tuple]
-                        node_converted.append(res_indice)
-                    nodes_indices.append(node_converted)
-
-                save(f"comp_id_{comp_id}", "nodes_indices", nodes_indices)
-
-                matrices_mul, maps_mul = create_std_matrix(
-                    nodes=nodes_indices,
-                    matrices=matrices_dict,
-                    maps=maps,
-                    threshold=config["distance_diff_threshold"]
-                )
-
-                save(f"comp_id_{comp_id}", "matrices_mul", matrices_mul)
-                save(f"comp_id_{comp_id}", "maps_mul", maps_mul)
-                
-                debugar_ = True if len(nodes) > 300 else False
-
-                tracer = TraversalTracer(
-                    out_dir="viz_runs",
-                    fmt="mp4",        # ou "mp4"
-                    fps=12,
-                    sample_every=50,  # amostragem para reduzir frames
-                    max_frames=2000,  # corta se passar disso
-                    dpi=110,
-                    enabled=True
-                )
-
-                if not debugar_: tracer.enabled=False
-
-                frames, union_graph, error = generate_frames(
-                    matrices=matrices_mul,
-                    maps=maps_mul,
-                    len_component=len_component,
-                    chunk_id=comps_idx,
-                    step=passo,
-                    debug=debugar_,
-                    tracer=tracer
-                )
-
-                if len(frames.keys()) > 1:
-                    
-                    if passo < passos: 
-                        Frames_comp = Frames_comp.union(union_graph["edges_residues"])
-                    else:
-                        Graphs.extend([(create_graph(frames, typeEdge="edges_residues", comp_id=comp_id), comp_id)])
-
-                    comp_id += 1
-                else:
-                    log.debug("Component Refused")
-            tuple_edges_frames = [tuple(edge) for edge in Frames_comp]
-
-            Graph_union_frames = nx.Graph()
-            Graph_union_frames.add_edges_from(tuple_edges_frames)
-            Graphs_frames.append((comps_idx, Graph_union_frames)) 
-
-        filtered_cross_combos = [rebuild_filtered_combos(filtered_combos, Graphs_frames[i][1]) for i, filtered_combos in enumerate(filtered_combos_list)]
-    log.debug("Finished creating ALL Frames")
-    # log.debug(f"Took {end_frame - start_frame:.6f} seconds to create ALL Frames")
+            log.debug(f"Component Refused")
+    end_frame = time.perf_counter()
+    log.debug(f"Took {end_frame - start_frame:.6f} seconds to create ALL Frames")
     save("association_product", f"Graphs", Graphs)
-
     return {
             "AssociatedGraph": Graphs
         }
-def generate_frames(matrices, maps, len_component, chunk_id, step, debug=False, debug_every=5000, tracer: TraversalTracer=None):
+
+def generate_frames(matrices, maps, *, debug=True, debug_every=5000):
     """
     Build frames by branching on coherent groups of the frontier.
 
@@ -1999,6 +1823,8 @@ def generate_frames(matrices, maps, len_component, chunk_id, step, debug=False, 
     _, edges_idx_0, edges_res_0 = convert_edges_to_residues(edges_base, maps)
     frames[0] = {"edges_indices": edges_idx_0, "edges_residues": edges_res_0}
 
+    residue_maps_unique = maps["residue_maps_unique"]
+    possible_nodes_map = maps["possible_nodes"] 
 
     def frontier_for(chosen: np.ndarray, inter_mask: np.ndarray) -> tuple:
         """
@@ -2092,6 +1918,8 @@ def generate_frames(matrices, maps, len_component, chunk_id, step, debug=False, 
             # Escolhemos um pivô (nó com maior vizinhança em N) para reduzir ramificações
             U = P | X
             pivot = max(U, key=lambda v: len(N[v])) if U else None
+
+            # Só vamos expandir pelos nós que NÃO são vizinhos do pivô
             ext = P - (N[pivot] if pivot is not None else set())
 
             for v in list(ext):
@@ -2137,8 +1965,6 @@ def generate_frames(matrices, maps, len_component, chunk_id, step, debug=False, 
     # ordem de nodes por grau
     deg_all = A.sum(axis=1)
     order_all = np.argsort(-deg_all)
-    len_order = len(order_all)
-    # order_all = list(nx.algorithms.core.degeneracy_ordering(nx.from_numpy_array(A)))
 
     seen_edge_sets    = set()   # chaves de arestas aceitas
     visited_states    = set()   # (chosen_tuple, mask_signature)
@@ -2147,15 +1973,10 @@ def generate_frames(matrices, maps, len_component, chunk_id, step, debug=False, 
 
     pushes = pops = accepts = 0
     pruned_dupe_state = 0
+    max_depth = 0
 
-    if debug: log.debug("Traversing nodes in descending order of degree ")
-    for node_id, node in enumerate(order_all): # Percorremos os nós na ordem do maior grau para o menor grau
-        if tracer and tracer.enabled:
-            # passa a matriz A do componente que você está explorando aqui; se for o grafo inteiro A, serve
-            tracer.start_anchor(anchor=int(node), A_sub=A, nodes_map=np.arange(A.shape[0], dtype=int))
-        str_node = f"{node_id}/{len_order}"
-        if debug: log.debug(f"Node: {str_node}") 
-
+    for node in order_all: # Percorremos os nós na ordem do maior grau para o menor grau
+        
         inter = C[int(node)].copy() # Primeiro começamos pegando a linha de coerência que representa o nó e fazemos uma cópia dela (para não modificar o original)
         accepted = (int(node),) # Iniciamos os nós que serão percorridos com o próprio nó inicial
 
@@ -2195,91 +2016,61 @@ def generate_frames(matrices, maps, len_component, chunk_id, step, debug=False, 
         O retorno é uma lista de assinaturas 'sig' para deduplicar estados (chosen, máscara, fronteira), e as tuplas (chosen_g, inter_g, frontier_g)
         que formam os filhos do estado atual no backtracking. Dessa forma exploramos ramos por “pacotes coerentes”, sem eliminar à força toda a fronteira.
         """
-        if debug: log.debug(f"[{str_node}] Creating groups...")
         groups = expand_groups(accepted, inter, frontier)
-        if debug: log.debug(f"[{str_node}] Groups created: {groups}")
         # print(groups)
-        if debug: log.debug(f"[{str_node}] Adding to stack...")
-        if tracer and tracer.enabled:
-            tracer.tick(current=int(node), chosen=accepted, frontier=frontier)
-
         for sig, chosen_g, inter_g, frontier_g in groups:
             # Evitamos revisitar exatamente o mesmo estado (mesmo conjunto escolhido, mesma máscara e mesma fronteira),
             # o que previne ciclos e explosão desnecessária de busca.
             if sig in visited_states:
-                # log.debug(f"[{node_id}/{len_order}] Sig already seen")
                 pruned_dupe_state += 1
                 continue
             visited_states.add(sig)
-            added = tuple(sorted(set(chosen_g) - set(accepted)))
+
             # Empilhamos o novo estado completo para exploração em profundidade.
-            stack.append((chosen_g, inter_g, frontier_g, added))
+            # Guardamos também uma versão “resumida” (sem máscara) só para logs/depuração rápida.
+            stack.append((chosen_g, inter_g, frontier_g))
             stack_small.append((chosen_g, frontier_g))
             pushes += 1
-        if debug: log.debug(f"[{str_node}] Stack created.")
-        to_break = False
+
+
         # Log inicial para este nó-semente: quantos estados entraram na pilha e um snapshot compacto.
         # log.debug(f"[node {int(node)}] inicializado com {len(stack)} stack | {stack_small}")
 
         # Loop principal de busca em profundidade (DFS) sobre os estados empilhados.
-        current_stack = 0
         while stack:
-            current_stack+=1
-            str_stack = f"{str_node}|{current_stack}"
-            if debug: log.debug(f"[{str_node}] Current stack: {current_stack}")
-            chosen_t, inter_m, frontier_t, added_t = stack.pop()
-            if tracer and tracer.enabled:
-                tracer.tick(current=added_t if added_t else (),
-                            chosen=chosen_t,
-                            frontier=frontier_t)
+            chosen_t, inter_m, frontier_t = stack.pop()
             pops += 1
             chosen = list(chosen_t)
             frontier = set(frontier_t)
 
-            if debug: log.debug(f"[{str_stack}] Expanding group")
             # 1) primeiro tenta expandir (gerar filhos)
             children = []
             groups_s = expand_groups(chosen_t, inter_m, frontier)
-            
-            if debug: log.debug(f"[{str_stack}] Finished expanding groups: {groups_s} ")
 
             for sig, c_g, m_g, f_g in groups_s:
                 if sig in visited_states:
                     pruned_dupe_state += 1
                     continue
                 visited_states.add(sig)
-                added = tuple(sorted(set(c_g) - set(chosen_t)))
-                children.append((c_g, m_g, f_g, added))
+                children.append((c_g, m_g, f_g))
 
             if children:
-                if debug: log.debug(f"[{str_stack}] Found childrens, putting in the stack: {children}")
                 # ainda há filhos: empilha e segue a busca
                 stack.extend(children)
                 pushes += len(children)
             else:
                 # 2) nó-folha: avaliamos aceitação do subgrafo
-                if debug: log.debug(f"[{str_stack}] Reached the leaf, avaliating...")
                 if len(chosen) >= 4:
-                    if debug: log.debug(f"[{str_stack}] Len of chose: {len(chosen)}")
                     cn = frozenset(chosen)
                     if cn not in checked_node_sets:
                         checked_node_sets.add(cn)
-                        if debug: log.debug(f"[{str_stack}] Checking if it's a valid subraph...")
                         ok, es = valid_subgraph(chosen)
-                        if debug: log.debug(f"[{str_stack}] Check finished")
                         if ok:
                             # chave canônica das arestas: pares (u<v), conjunto não-ordenado
                             edge_key = frozenset(tuple(sorted(e)) for e in es)
                             if edge_key not in seen_edge_sets:                       
                                 seen_edge_sets.add(edge_key)
-                                if tracer and tracer.enabled:
-                                    tracer.tick(current=None,
-                                                chosen=chosen,
-                                                frontier=(),
-                                                accepted_edges_latest=es)
-                                if debug: log.debug(f"[{str_stack}] Converting edges...")
                                 _, edges_idx, edges_res = convert_edges_to_residues(es, maps)
-                                if debug: log.debug(f"[{str_stack}] Conversion finished.")
                                 frames[next_frame_id] = {
                                     "edges_indices": edges_idx,
                                     "edges_residues": edges_res,
@@ -2287,179 +2078,46 @@ def generate_frames(matrices, maps, len_component, chunk_id, step, debug=False, 
                                 accepts += 1
                                 next_frame_id += 1
 
-                else:
-                    if debug: log.debug(f"Chose have len < 4: {len(chosen)}")
-
             if (pops % debug_every == 0):
                 log.debug(
                     f"[progress] pops={pops:,} pushes={pushes:,} accepts={accepts:,} "
                     f"visited={len(visited_states):,} checked={len(checked_node_sets):,} "
                     f"pruned_dupe={pruned_dupe_state:,} stack={len(stack)}"
                 )
-                if pushes > 600_000:
-                    print(f"The stack is above than 600.000 pushes | {pushes}. The component have {len_component} nodes, and it came from the chunk {chunk_id}, step {step}.")
-                    to_break = False
-                    # return _, _, True
-            if to_break:
-                break
-
-        if tracer and tracer.enabled:
-            out_file = tracer.end_anchor(name_prefix=f"chunk{chunk_id}_step{step}_anchor{int(node)}")
-            if debug and out_file:
-                log.debug(f"[{str_node}][viz] salvo: {out_file}")
-
-    
-    if debug: log.debug("Sorting frames...")
-
-    def canon_edge(e):
-        """Retorna a aresta em forma canônica (u, v) sem alterar a ordem interna dos nós."""
-        u, v = e
-        u = tuple(u)
-        v = tuple(v)
-        return (u, v) if u <= v else (v, u)
-
-    def canon_edges(edges_idx):
-        """Retorna conjunto não-direcionado e sem duplicatas de arestas canônicas."""
-        return frozenset(canon_edge(e) for e in edges_idx)
 
 
-    def filter_subframes(frames, debug=False):
-        """
-        Remove frames que são subconjuntos de outros (mantém apenas os máximos por inclusão),
-        mantendo o frame base (id=0) como o primeiro no resultado final.
-        """
-        if debug: log.debug("Starting subframe filtering...")
-
-        # 1) separar frame base
-        base0 = frames.get(0)
-        items = [(fid, frames[fid]) for fid in frames if fid != 0]
-
-        if debug:
-            log.debug(f"Found {len(items)} non-base frames to process.")
-            if base0 is not None:
-                log.debug("Frame 0 detected and will be re-added at the end as base frame.")
-
-        # 2) ordenar por tamanho canônico de arestas (decrescente)
-        if debug: log.debug("Canonicalizing and sorting frames by edge count...")
-        items_sorted = sorted(
-            ((fid, fr, canon_edges(fr["edges_indices"])) for fid, fr in items),
-            key=lambda t: -len(t[2])
-        )
-
-        if debug:
-            log.debug("Frames sorted by descending edge count:")
-            for idx, (fid, _, es) in enumerate(items_sorted[:10]):
-                log.debug(f"  [{idx}] fid={fid} edges={len(es)}")
-
-        # 3) filtro de subconjunto
-        kept_sets = []
-        kept_frames = []
-        total = len(items_sorted)
-        for idx, (fid, fr, es) in enumerate(items_sorted):
-            if any(es.issubset(k) for k in kept_sets):
-                if debug:
-                    log.debug(f"[{idx}/{total}] Frame {fid} skipped (subset of existing).")
-                continue
-
-            # remove qualquer conjunto estritamente menor já contido nesse novo
-            to_drop = [k for k in kept_sets if k.issubset(es) and k != es]
-            if to_drop:
-                if debug:
-                    log.debug(f"[{idx}/{total}] Frame {fid} supersedes {len(to_drop)} smaller frames.")
-                kept_sets = [k for k in kept_sets if k not in to_drop]
-
-            kept_sets.append(es)
-            kept_frames.append(fr)
-
-            if debug:
-                log.debug(f"[{idx}/{total}] Frame {fid} accepted. Total kept: {len(kept_frames)}")
-
-        # 4) montar final_frames com frame 0 na frente
-        final_frames = {}
-        fid_out = 0
-        if base0 is not None:
-            final_frames[fid_out] = base0
-            fid_out += 1
-
-        for fr in kept_frames:
-            final_frames[fid_out] = fr
-            fid_out += 1
-
-        if debug:
-            log.debug(f"Subframe filtering complete: {len(final_frames)} frames kept total "
-                      f"({len(kept_frames)} non-base + base0).")
-
-        return final_frames
-
-    # others = sorted(
-    #     (fid for fid in frames if fid != 0),
-    #     key=lambda fid: len(frames[fid]["edges_indices"]),
-    #     reverse=True
-    # )
-
-    # if debug: log.debug("Frames sorted...")
-    # ordered = {0: {"edges_indices": [], "edges_residues": []}}
-    # for new_id, old_id in enumerate(others, start=1):
-    #     ordered[new_id] = frames[old_id]
-
-    # final_frames = {}
-    kept_edge_sets = []
-    # fid_out = 0
-    # if debug: log.debug("Checking frames that are subset of others")
-    # len_or = len(ordered.items())
-    # for idx, (_, fr) in enumerate(ordered.items()):
-    #     if debug: log.debug(f"Checking frame: {idx}/{len_or}")
-    #     es = frozenset(map(tuple, fr["edges_indices"]))
-    #     if any(es.issubset(k) for k in kept_edge_sets):
-    #         continue
-    #     # drop strict subsets already kept
-    #     if debug: log.debug(f"[{idx}/{len_or}] Dropping subsets...")
-    #     to_drop = [k for k in kept_edge_sets if k.issubset(es) and k != es]
-    #     if to_drop:
-    #         kept_edge_sets = [k for k in kept_edge_sets if k not in to_drop]
-    #     if debug: log.debug(f"[{idx}/{len_or}] Subsets dropped.")
-    #     final_frames[fid_out] = fr
-    #     kept_edge_sets.append(es)
-    #     fid_out += 1
-
-    final_frames = filter_subframes(frames, debug=True)
-
-    # log.debug(f"[done] frames_out={len(final_frames)} "
-                # f"(accepted_raw={len(others)}, kept_maximal={len(final_frames)-1})")
-    
-    edge_to_res = {}          # dict[tuple(edge)] -> tuple(residues) | None
-    union_order = []          # ordem determinística: primeira ocorrência ao percorrer os frames
-    
-    for fid, fr in final_frames.items():
-        if fid == 0:
-            continue
-        ei = fr.get("edges_indices", [])
-        er = fr.get("edges_residues", [])
-        for j, e in enumerate(ei):
-            e_t = e if isinstance(e, tuple) else tuple(e)
-            if e_t not in edge_to_res:
-                union_order.append(e_t)
-                edge_to_res[e_t] = tuple(er[j]) if (er and j < len(er)) else None
-
-    union_edges_indices = union_order
-    union_edges_residues = {frozenset(edge_to_res[e]) for e in union_order}
-
-    union_graph = {
-        "edges_indices": union_edges_indices,
-        "edges_residues": union_edges_residues,
-    }
-
-    log.debug(
-        f"[union] frames_used={len(final_frames)-1} edges={len(union_edges_indices)} "
-        f"(excluded_fid=0)"
+    # -------- post-pass: keep maximal by edges (subset removal) --------
+    others = sorted(
+        (fid for fid in frames if fid != 0),
+        key=lambda fid: len(frames[fid]["edges_indices"]),
+        reverse=True
     )
+    ordered = {0: {"edges_indices": [], "edges_residues": []}}
+    for new_id, old_id in enumerate(others, start=1):
+        ordered[new_id] = frames[old_id]
 
-    # log.debug(
-        # f"[done] frames_out={len(final_frames)} "
-        # f"(accepted_raw={len(others)}, kept_maximal={len(final_frames)-1})"
-    # )
+    final_frames = {}
+    kept_edge_sets = []
+    fid_out = 0
+    for _, fr in ordered.items():
+        es = frozenset(map(tuple, fr["edges_indices"]))
+        if any(es.issubset(k) for k in kept_edge_sets):
+            continue
+        # drop strict subsets already kept
+        to_drop = [k for k in kept_edge_sets if k.issubset(es) and k != es]
+        if to_drop:
+            kept_edge_sets = [k for k in kept_edge_sets if k not in to_drop]
+        final_frames[fid_out] = fr
+        kept_edge_sets.append(es)
+        fid_out += 1
 
-    return final_frames, union_graph, False
+    final_frames[0] = frames[0]
+
+
+    log.debug(f"[done] frames_out={len(final_frames)} "
+                f"(accepted_raw={len(others)}, kept_maximal={len(final_frames)-1})")
+
+    return final_frames
 
 def create_graph(edges_dict: Dict, typeEdge: str = "edges_indices", comp_id = 0):
     Graphs = []

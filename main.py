@@ -45,7 +45,7 @@ def load_manifest(manifest_path: str) -> Dict[str, Any]:
     S.setdefault("distance_bins", 5)
 
     S.setdefault("serd_config", None)
-
+    S.setdefault("max_chunks", 5)
     S.setdefault("classes", {})
 
 
@@ -93,6 +93,7 @@ def main():
         "checks":                      checks,
         "exclude_waters":              S.get("exclude_waters"),
         "classes": S.get("classes", {}),
+        "max_chunks": S.get("max_chunks"),
         "rsa_table": S.get("rsa_table", "Wilke")
     }
 
@@ -108,7 +109,7 @@ def main():
 
     log.debug("Drawing Graph")
     G.draw_graph_interactive(show=False, save=True)
-    G.draw_graph(show=False, save=True)
+    # G.draw_graph(show=False, save=True)
 
     G.create_pdb_per_protein()
     G.align_all_frames()

@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 *.pdb
 *.png
+*.mp4
+*.gif
 *.zip
 *.cif
 Analysis/*
