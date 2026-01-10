@@ -1,1 +1,1 @@
-from config.graph_config import *
+from config.parse_configs import *

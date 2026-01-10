@@ -1,218 +1,226 @@
-from graphein.protein.config import ProteinGraphConfig
-from graphein.protein.edges.distance import add_distance_threshold
-from functools import partial
-import pandas as pd
-from pathlib import Path
-import os
-from os import path
-import argparse
-from graph.graph import *
-from config.graph_config import make_graph_config
-from io_utils.pdb_io import list_pdb_files, get_user_selection
-import logging, sys
 import json
-import matplotlib
+import logging
+import os
+import shutil
+import sys
+from os import path
+from cli.cli_parser import parse_args
+from graph.graph import AssociatedGraph
+from utils.preprocessing import create_graphs
+from itertools import combinations
+from pathlib import Path
+from typing import Dict, Any
 
+from core.tracking import init_tracker
 
+def load_manifest(manifest_path: str) -> Dict[str, Any]:
+    if not manifest_path:
+        return {}
 
-'''
-#This script takes two pMHC structures as input and returns the common subgraphs, which will also be mapped to the structure
+    with open(manifest_path, "r") as f:
+        data = json.load(f)
 
-#The input PDB structures must be unbound, without the TCR, only the pMHC structure
+    data.setdefault("settings", {})
+    data.setdefault("inputs", [])
+    data.setdefault("selectors", {})
 
-#original work of a similar algorithm can be found in Protein−Protein Binding-Sites Prediction by Protein Surface Structure Conservation Janez Konc and Dušanka Janežič, 2006
+    S = data["settings"]
+    S.setdefault("run_name", "test")
+    S.setdefault("run_mode", "all")
+    S.setdefault("output_path", "./outputs")
 
-#Graphein was tested inside a conda enviroment
-
-#Graphein was not computing correctly the centoids when multiple chains were included, I correction I made was replace
-#["residue_number", "chain_id", "residue_name", "insertion"] by
-#["chain_id", "residue_number", "residue_name", "insertion"] in anaconda3/envs/graphein/lib/python3.8/site-packages/graphein/protein/graphs.py
-
-#I found some incompabilities when running dssp with graphein, so I had to made a correction in my graphein version:
-#In anaconda3/envs/graphein/lib/python3.8/site-packages/graphein/protein/features/nodes/dssp.py
-#I changed #pdb_file, DSSP=executable, dssp_version=dssp_version to 
-#pdb_file, DSSP=executable
-'''
-
-def none_or_float(value):
-    if value == 'None':
-        return None
-    return float(value)
-
-#command example
-#python3 --molA_path /home/helder/Projects/pMHC_graphs/pdbs_teste/pmhc_mage3_5brz_renumber.pdb --molB_path /home/helder/Projects/pMHC_graphs/pdbs_teste/pmhc_titin_5bs0_renumber.pdb --interface_list /home/helder/Projects/pMHC_graphs/interface_MHC_unique.csv --centroid_threshold 10 --run_name teste_sim --association_mode similarity --output_path output5
-
-### functions
-
-def parser_args():
-    parser = argparse.ArgumentParser(description='Building common subgraphs')
-    parser.add_argument('--mols_path', type=str, default='',
-                        help='Path with PDB input files.')
-    # parser.add_argument('--interface_list', type=str, default='',
-                        # help='File with a canonical list of MHC residues at the interface with TCR. No header needed for this file.')
-    parser.add_argument('--centroid_threshold', type=int, default=10,
-                        help="Distance threshold for building the molA and molB interface graphs")
-    parser.add_argument('--run_name', type=str, default='test',
-                        help='Name for storing results in the output folder')
-    parser.add_argument('--association_mode', type=str, default='identity',
-                        help='Mode for creating association nodes. Identify or similarity.')                                        
-    parser.add_argument('--output_path', type=str, default='~/',
-                        help='Path to store output results.')
-    parser.add_argument('--neighbor_similarity_cutoff', type=float, default=0.95,
-                        help="Threshold for neighbor's similarity ")
-    parser.add_argument('--rsa_filter', type=none_or_float, default=0.1,
-                        help="Threshold for filter residues by RSA")
-    parser.add_argument('--rsa_similarity_threshold', type=float, default=0.95,
-                        help="Threshold for make an associate graph using RSA similarity")
-    parser.add_argument('--residues_lists', type=str, default=None,
-                        help="Path to Json file which contains the pdb residues")
-    parser.add_argument('--debug', type=bool, default=False,
-                        help="Activate debug mode")
-    args = parser.parse_args()
+    os.makedirs(S["output_path"], exist_ok=True)
     
-    return args
+    shutil.copy2(manifest_path, S["output_path"]+"/manifest.json")
+    S.setdefault("debug", False)
+    S.setdefault("track_steps", False)
+    S.setdefault("rsa_table", "Wilke")
 
-def get_exposed_residues(graph: Graph, rsa_filter = 0.1, params=None):
-    all_residues = []
-    merge_graphs = []
-    
-    if rsa_filter is None:
-        graph.create_subgraph(name="exposed_residues")
-    else:
-        graph.create_subgraph(name="exposed_residues", rsa_threshold = rsa_filter)
-        
-    if "chains" not in params.keys() and "residues" not in params.keys():
+    S.setdefault("edge_threshold", 8.5)
+    S.setdefault("close_tolerance", 1.0)
+    S.setdefault("node_granularity", "all_atoms")
+    S.setdefault("exclude_waters", True)
 
-        return graph.get_subgraph(name="exposed_residues")
+    S.setdefault("triad_rsa", False)
+    S.setdefault("check_depth", False)
 
-    if "chains" in params.keys():
-        if not isinstance(params["chains"], list):
-            print(f"`chains` key must have a list. I received: {params['chains']}, {type(params['chains'])}")
-            exit(0)
-        
-        graph.create_subgraph(name= "selected_chains", chains=params["chains"])
-        merge_graphs.append("selected_chains")
-        
-    if "residues" in params.keys():
-        if not isinstance(params["residues"], dict):
-            print(f"`dict` key must have a list. I received: {params['dict']}, {type(params['dict'])}")
-            exit(0)
-        
-        residues_dict = params["residues"]
-        
-        for chain in residues_dict:
-            if not isinstance(residues_dict[chain], list):
-                print(f"The key {chain} in residues isn't a list")
-                exit(0)
-            
-            all_residues += residues_dict[chain]
-            
-        graph.create_subgraph(name="all_residues", sequence_positions=all_residues)
-        merge_graphs.append("all_residues")
-    
-    graph.join_subgraph(name="merge_list", graphs_name=merge_graphs)
-    
-    exposed_nodes = graph.filter_subgraph(subgraph_name="exposed_residues", name="selected_exposed_residues", filter_func= lambda i: i in graph.subgraphs["merge_list"], return_node_list=True)
-    graph.create_subgraph(name = "s_graph", node_list=exposed_nodes, return_node_list=False)
-    
-    return graph.get_subgraph("s_graph")
+    S.setdefault("rsa_filter", 0.1)
+    S.setdefault("depth_filter", 10.0)
 
-def get_exposed_residues_mhc(graph: Graph, inter_list, rsa_filter = 0.1, chains_peptide = ["C"], chain_mhc = "A"):
-    graph.create_subgraph(name= "peptide_list", chains=chains_peptide)
-    graph.create_subgraph(name="mhc_list", sequence_positions=inter_list)
-    graph.filter_subgraph(subgraph_name="mhc_list", filter_func= lambda i: i[0] == chain_mhc)
-    graph.create_subgraph(name="all_solv_exposed", rsa_threshold = rsa_filter)
-    graph.join_subgraph(name="all_list", graphs_name=["peptide_list", "mhc_list"])
-    lista_peptide_helix_exposed = graph.filter_subgraph(subgraph_name="all_solv_exposed", name="peptide_helix_exposed_list", filter_func = lambda i: i in graph.subgraphs["all_list"], return_node_list=True)
-    graph.create_subgraph(name = "s_graph", node_list=lista_peptide_helix_exposed, return_node_list= False)
+    S.setdefault("distance_std_threshold", 3.0)
+    S.setdefault("distance_diff_threshold", 1.0)
 
-    return graph.get_subgraph("s_graph")
+    S.setdefault("rsa_bin_width", 0.2)
+    S.setdefault("distance_bin_width", 2.0)
+    S.setdefault("depth_bins", 5)
 
-def main():
-    args = parser_args()
+    S.setdefault("dynamic_distance_classes", False)
+    S.setdefault("distance_bins", 5)
+    # S.setdefault("distance_bins", 5)
 
-    #### Inputs 
+    S.setdefault("serd_config", None)
+    S.setdefault("max_chunks", 5)
 
-    # List of MHC interface residues with TCR from the non-redundant TCR:pMHC analysis
-    # inter_list = pd.read_csv(args.interface_list, header=None)[0].to_list()
-    
-    centroid_threshold=args.centroid_threshold
-    rsa_filter = args.rsa_filter
-    rsa_similarity_threshold = args.rsa_similarity_threshold
-    neighbor_similarity_cutoff = args.neighbor_similarity_cutoff
-    
-    debug = args.debug
-    logging.basicConfig(stream=sys.stdout, level=logging.INFO)
-    
-    if debug:
-        logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
-        log = logging.getLogger("CRSProtein") 
-        log.setLevel(logging.DEBUG)
-    else:
-        logging.basicConfig(stream=sys.stdout, level=logging.INFO)
-        log = logging.getLogger("CRSProtein") 
-        log.setLevel(logging.INFO)
-    
-    with open(args.residues_lists, "r") as f:
-        residues_lists = json.load(f) 
+    S.setdefault("filter_triads_by_chain", None)
+    S.setdefault("classes", {})
 
 
-    # List of paths
-    mols_path = args.mols_path
-    mols_files = list_pdb_files(mols_path)
-    if not mols_files:
-        return
-        
-    selected_files = get_user_selection(mols_files, mols_path)
-    # selected_files = [("pdb_input/pmhc_titin_5bs0_renumber.pdb", "pmhc_titin_5bs0_renumber.pdb")]*8
+    return data
 
-    #output folder
-    output_path = args.output_path
-    #Path to full common subgraph
-    path_full_subgraph = path.join(output_path,f"full_association_graph_{args.run_name}.png")
-    ################################
-
-    #check if output folder exists, otherwise create it 
+def run_association_task(graphs, output_path, run_name, association_config, log):
+    """
+    Helper function to run the association logic for a specific set of graphs
+    and a specific output directory.
+    """
     Path(output_path).mkdir(parents=True, exist_ok=True)
 
-    # Initialize the protein graph config
-    config = make_graph_config(centroid_threshold=centroid_threshold)
-    
-    graphs = []
+    task_config = association_config.copy()
+    task_config["output_path"] = str(output_path)
 
-    for mol_path in selected_files:
-        # Build general pMHC interface graph for MolA
-        g = Graph(config=config, graph_path=mol_path[0])
-        params = residues_lists[mol_path[1]]
+    log.info(f"Starting run '{run_name}' in mode: {task_config['run_mode']} with {len(graphs)} graphs.")
+    log.info(f"Output directory: {output_path}")
+
+    G = AssociatedGraph(
+        graphs=graphs,
+        output_path=str(output_path),
+        run_name=run_name,
+        association_config=task_config,
+    )
+
+    if G.associated_graphs is None:
+        log.warning(f"No associated graphs found for {run_name}.")
+        return
+
+    log.debug(f"Drawing Graph for {run_name}")
+    G.draw_graph_interactive(show=False, save=True)
+    # G.draw_graph(show=False, save=True)
+    
+    G.create_pdb_per_protein()
+    G.align_all_frames()
+
+    # log.debug("Growing Subgraph")
+    # try:
+    #     G.grow_subgraph_bfs()
+    # except Exception as e:
+    #     log.error(f"Unable to grow subgraphs with BFS. Error: {e}")
+
+    graph_data = dict()
+    for j, comps in enumerate(G.associated_graphs):
+        graph_data[j] = {"comp": j, "frames": {}}
+        for i in range(len(comps[0])):
+            nodes = list(comps[0][i].nodes)
+            edges = list(comps[0][i].edges)
+            neighbors = {
+                str(node): [str(neighbor) for neighbor in comps[0][i].neighbors(node)]
+                for node in nodes
+            }
+            graph_data[j]["frames"][i] = {
+                "nodes": nodes,
+                "edges": edges,
+                "neighbors": neighbors
+            }
+
+    output_json = path.join(output_path, f"graph_{run_name}.json")
+    with open(output_json, "w") as f:
+        json.dump(graph_data, f, indent=4)
+    log.info(f"Graph data saved to {output_json}")
+
+def main():
+    args = parse_args() 
+    manifest = load_manifest(args.manifest)
+    S = manifest["settings"] 
+    
+    base_run_name = S["run_name"]
+    base_output_path = S["output_path"]
+    run_mode = S.get("run_mode", "all") 
+
+    init_tracker(
+        root="CrossSteps",
+        outdir=base_run_name,
+        enabled=S.get("track_steps", False),
+        prefer_npy_for_ndarray=True,
+        add_timestamp_prefix=False,
+    )
+
+    logging.getLogger("matplotlib").setLevel(logging.ERROR)
+    logging.basicConfig(
+        stream=sys.stdout,
+        level=logging.DEBUG if S.get("debug", False) else logging.INFO
+    )
+    log = logging.getLogger("CRSProtein")
+    log.setLevel(logging.DEBUG if S.get("debug", False) else logging.INFO)
+
+    checks = {
+        "depth": S.get("check_depth"),
+        "rsa":   S.get("triad_rsa"),
+    }
+
+    # Load all graphs once
+    graphs = create_graphs(manifest)
+
+    base_association_config = {
+        "run_mode":                 run_mode,
+        "edge_threshold":           S.get("edge_threshold"),
+        "distance_std_threshold":   S.get("distance_std_threshold"),
+        "distance_diff_threshold":  S.get("distance_diff_threshold"),
+        "rsa_filter":               S.get("rsa_filter"),
+        "depth_filter":             S.get("depth_filter"),
+        "rsa_bin_width":            S.get("rsa_bin_width"),
+        "depth_bins":               S.get("depth_bins"),
+        "distance_bin_width":       S.get("distance_bin_width"),
+        "close_tolerance":          S.get("close_tolerance"),
+        "checks":                   checks,
+        "exclude_waters":           S.get("exclude_waters"),
+        "classes":                  S.get("classes", {}),
+        "max_chunks":               S.get("max_chunks"),
+        "rsa_table":                S.get("rsa_table", "Wilke"),
+        "dynamic_distance_classes": S.get("dynamic_distance_classes", False),
+        "distance_bins":            S.get("distance_bins", 5),
+        "filter_triads_by_chain":   S.get("filter_triads_by_chain", None),
+        # "output_path": passed dynamically
+    }
+
+    if run_mode == "all":
+        target_dir = path.join(base_output_path, "ALL")
+        run_association_task(
+            graphs=graphs,
+            output_path=target_dir,
+            run_name=base_run_name, # Keep original name or modify if preferred
+            association_config=base_association_config,
+            log=log
+        )
+
+    elif run_mode == "pair":
+        pair_base_dir = path.join(base_output_path, "PAIR")
         
-        if "base" in params.keys():
-            base = params["base"]
-            try:
-                params = residues_lists[base]
-            except KeyError as e:
-                raise KeyError(f"I wasn't able to find the template for {base}. Error message: {e}")            
-    
-        # s_g = get_exposed_residues_mhc(g, inter_list=inter_list, rsa_filter = rsa_filter, chains_peptide=["C"], chain_mhc="A")
-        s_g = get_exposed_residues(graph=g, rsa_filter=rsa_filter, params=params )
-        graphs.append((s_g, mol_path[0]))
+        for g1, g2 in combinations(graphs, 2):
+            name1 = Path(g1[1]).stem
+            name2 = Path(g2[1]).stem
+            
+            name1 = name1.replace("_nOH", "")
+            name2 = name2.replace("_nOH", "")
 
-    G = AssociatedGraph(graphs=graphs, output_path=output_path, path_full_subgraph=path_full_subgraph, association_mode=args.association_mode, run_name= args.run_name, centroid_threshold=centroid_threshold, neighbor_similarity_cutoff=neighbor_similarity_cutoff, rsa_similarity_threshold=rsa_similarity_threshold)
-    G_sub = G.associated_graph
+            pair_folder_name = f"{name1}_vs_{name2}"
+            target_dir = path.join(pair_base_dir, pair_folder_name)
+            
+            pair_run_name = f"{base_run_name}_{name1}_{name2}"
 
-    G.draw_graph(show = True)
-
-    G.grow_subgraph_bfs()
+            run_association_task(
+                graphs=[g1, g2],
+                output_path=target_dir,
+                run_name=pair_run_name,
+                association_config=base_association_config,
+                log=log
+            )
+            
+    else:
+        log.error(f"Unknown run_mode: {run_mode}. Please use 'all' or 'pair'.")
 
 if __name__ == "__main__":
-    
-    import os
-
-    # Verificar o número de threads OpenMP
+    log = logging.getLogger("CRSProtein")
     num_threads = os.environ.get('OMP_NUM_THREADS', None)
     if num_threads:
-        print(f"Usando {num_threads} threads OpenMP.")
+        log.info(f"Using {num_threads} threads OpenMP.")
     else:
-        print("A variável OMP_NUM_THREADS não está definida.")
-
+        log.info("The variable `OMP_NUM_THREADS` is not defined.")
     main()
-    
