@@ -14,7 +14,7 @@
     "_distance_std_threshold": {"A": 2.0, "C": 3.0},
     "distance_std_threshold": 3.0,
     "distance_diff_threshold": 2.0,
-    
+    "filter_triads_by_chain": ["C"],    
     "distance_bin_width": 2,
     "rsa_bins": 3,
     "depth_bins": 5,

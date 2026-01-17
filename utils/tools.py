@@ -201,7 +201,6 @@ def filter_maps_by_nodes(data: dict,
         matrices_dict["pruned_contact_maps"] = pruned_contact_maps
         matrices_dict["thresholded_contact_maps"] = thresholded_contact_maps
         matrices_dict["thresholded_rsa_maps"] = thresholded_rsa_maps
-        matrices_dict["thresholded_depth_maps"] = None
     
     return matrices_dict, maps
 
@@ -332,62 +331,6 @@ def value_to_class(
             classes.append(j)
 
     return classes if classes else None
-   
-def dynamic_distance_to_classes(
-    distance_classes: Dict[str, Dict[str, float]],
-    value: float,
-    diff_threshold: float,
-    close_tolerance: float,
-) -> Optional[Union[str, List[str]]]:
-    """
-    distance_classes: { class_name: {"low": float, "high": float}, ... }
-    value: distance value (d1, d2, d3, ...)
-    diff_threshold: distance_diff_threshold (max allowed distance diff between triads)
-    close_tolerance: tolerance to say "this value is clearly in this bin"
-
-    Returns:
-        - None  -> no valid bin
-        - "bin_k" or ["bin_k"]  -> single bin
-        - ["bin_i", "bin_j", ...] -> multiple bins (near boundary)
-    """
-    # Filter only bins that could reasonably contain value
-    candidate_bins = []
-    for name, interval in distance_classes.items():
-        low = interval["low"]
-        high = interval["high"]
-        if low <= value <= high:
-            center = 0.5 * (low + high)
-            candidate_bins.append((name, low, high, center))
-
-    if not candidate_bins:
-        # Value is outside all dynamic bins
-        return None
-
-    # Choose primary bin: the one whose center is closest to value
-    primary = min(candidate_bins, key=lambda x: abs(value - x[3]))
-    primary_name, primary_low, primary_high, primary_center = primary
-
-    # If clearly inside this bin (center region), return only this one
-    if abs(value - primary_center) <= close_tolerance:
-        return [primary_name]
-
-    # Otherwise, build an uncertainty interval based on diff_threshold
-    low_unc = value - diff_threshold
-    high_unc = value + diff_threshold
-
-    # Collect all bins that intersect [low_unc, high_unc]
-    hits: List[str] = []
-    for name, interval in distance_classes.items():
-        low = interval["low"]
-        high = interval["high"]
-        # intersection check between [low_unc, high_unc] and [low, high]
-        if (low_unc <= high) and (high_unc >= low):
-            hits.append(name)
-
-    if not hits:
-        return None
-
-    return hits if len(hits) > 1 else hits[0]
 
 def create_classes_bin(total_length: float, bin_width: float): 
     """Creates a dictionary of bins with their respective ranges."""
@@ -575,99 +518,8 @@ def collect_all_distances(graph_data, edge_threshold: float) -> np.ndarray:
 
     return all_dists
 
-
-def build_dynamic_distance_classes(
-    all_dists: np.ndarray,
-    n_bins: int,
-    edge_threshold: float,
-) -> Dict[str, Dict[str, float]]:
-    """
-    Build dynamic distance classes using quantile-based binning.
-
-    - all_dists: 1D array of distances (already filtered by threshold).
-    - n_bins: desired number of bins.
-    - edge_threshold: upper cutoff (used as fallback / sanity).
-
-    Returns:
-        {
-            "bin_1": {"low": low_1, "high": high_1},
-            "bin_2": {"low": low_2, "high": high_2},
-            ...
-        }
-
-    Bins are [low, high] or [low, high) depending on how your find_class works;
-    adjust there if needed.
-    """
-    if all_dists.size == 0:
-        return {}
-
-    # Quantile-based edges -> roughly equal number of pairs per bin
-    quantiles = np.linspace(0.0, 1.0, n_bins + 1)
-    raw_edges = np.quantile(all_dists, quantiles)
-
-    # Ensure strictly increasing edges (collapse near-duplicates)
-    bin_edges = [float(raw_edges[0])]
-    for e in raw_edges[1:]:
-        e = float(e)
-        if e - bin_edges[-1] > 1e-6:
-            bin_edges.append(e)
-
-    # If everything collapsed to one value, make a single bin [0, edge_threshold]
-    if len(bin_edges) == 1:
-        bin_edges = [0.0, float(edge_threshold)]
-
-    # Clamp max edge to edge_threshold (so we never exceed what triads use)
-    if bin_edges[-1] > edge_threshold:
-        bin_edges[-1] = float(edge_threshold)
-
-    classes = {}
-    for i in range(len(bin_edges) - 1):
-        low = float(bin_edges[i])
-        high = float(bin_edges[i + 1])
-        # Skip zero-width bins just in case
-        if high <= low:
-            continue
-        class_name = f"bin_{i+1}"
-        classes[class_name] = {"low": low, "high": high}
-
-    return classes
-
-
-def plot_distance_distribution(
-    all_dists: np.ndarray,
-    classes: Dict[str, Dict[str, float]],
-    output_path: str,
-    filename: str = "distance_distribution.png",
-):
-    """
-    Save a histogram of all distances and draw vertical lines at bin boundaries.
-    """
-    if all_dists.size == 0:
-        return
-
-    os.makedirs(output_path, exist_ok=True)
-    out_file = os.path.join(output_path, filename)
-
-    plt.figure()
-    plt.hist(all_dists, bins=50, density=False, alpha=0.7)
-    # Draw bin edges
-    edges = sorted(
-        {c["low"] for c in classes.values()} |
-        {c["high"] for c in classes.values()}
-    )
-    for e in edges:
-        plt.axvline(e, linestyle="--", alpha=0.5)
-
-    plt.xlabel("Distance")
-    plt.ylabel("Count")
-    plt.title("Distance distribution with dynamic bins")
-    plt.tight_layout()
-    plt.savefig(out_file, dpi=150)
-    plt.close()
-
 def find_triads(graph_data, classes, config, checks):
     G = graph_data["graph"]
-    depth = graph_data["residue_depth"]
     rsa = graph_data["rsa"]
     contact_map = graph_data["contact_map"]
     residue_map = graph_data["residue_map_all"]
@@ -684,7 +536,6 @@ def find_triads(graph_data, classes, config, checks):
         residue_classes = None
  
     rsa_classes = classes["rsa"] if "rsa" in classes.keys() else None 
-    depth_classes = classes["depth"] if "depth" in classes.keys() else None
     distance_classes = classes["distance"] if "distance" in classes.keys() else None
 
     n_nodes = len(G.nodes())
@@ -693,11 +544,17 @@ def find_triads(graph_data, classes, config, checks):
         neighbors = {n for n in G.neighbors(center) if n != center}
         for u, w in combinations(neighbors, 2):
             chains = config.get("filter_triads_by_chain", None)
+            u_chain = u.split(":")[0]
+            center_chain = center.split(":")[0]
+            w_chain = w.split(":")[0]
+
             if isinstance(chains, list) and len(chains) > 0:
-                u_chain = u.split(":")[0]
-                center_chain = center.split(":")[0]
-                w_chain = w.split(":")[0]
                 if u_chain not in chains and center_chain not in chains and w_chain not in chains:
+                    log.debug(f"({u}, {center}, {w}) was filtered.")
+                    continue
+            elif isinstance(chains, str) and chains.strip() != "":
+                if u_chain != chains and center_chain != chains and w_chain != chains:
+                    log.debug(f"({u}, {center}, {w}) was filtered.")
                     continue
 
             if u[:5] == w[:5]:
@@ -746,27 +603,10 @@ def find_triads(graph_data, classes, config, checks):
                 chi = 0
                 print(f"Nan: {u_cb, center_cb, w_cb}")
                 print(u, center, w)
-                input()
              
             rsa1 = rsa[outer_sorted[0]]*100
             rsa2 = rsa[center]*100
             rsa3 = rsa[outer_sorted[1]]*100
-
-            if checks["depth"]:
-                depth1 = depth.loc[depth["ResNumberChain"] == u_resChain]["ResidueDepth"].values[0]
-                depth2 = depth.loc[depth["ResNumberChain"] == center_resChain]["ResidueDepth"].values[0]
-                depth3 = depth.loc[depth["ResNumberChain"] == w_resChain]["ResidueDepth"].values[0]
-
-                if depth_classes is not None:
-                    depth1_class = find_class(depth_classes, depth1)
-                    depth2_class = find_class(depth_classes, depth2)
-                    depth3_class = find_class(depth_classes, depth3)
-                else:
-                    depth1_class = value_to_class(depth1, config["depth_bins"], config["depth_filter"])
-                    depth2_class = value_to_class(depth2, config["depth_bins"], config["depth_filter"])
-                    depth3_class = value_to_class(depth3, config["depth_bins"], config["depth_filter"])
-            else:
-                depth1_class, depth2_class, depth3_class = 0, 0, 0
                 
             if checks["rsa"]:
                 if rsa_classes is not None:
@@ -779,41 +619,12 @@ def find_triads(graph_data, classes, config, checks):
                     rsa3_class = _as_list(value_to_class(rsa3, config["rsa_bin_width"], config["rsa_filter"]*100, inverse=True, close_tolerance=config["close_tolerance_rsa"]))
             else:
                 rsa1_class, rsa2_class, rsa3_class = 0, 0, 0
-                                            
-            dynamic_dist = config.get("dynamic_distance_classes", False)
 
-            if distance_classes is not None and dynamic_dist:
-                d1_opts = _as_list(
-                    dynamic_distance_to_classes(
-                        distance_classes,
-                        d1,
-                        diff_threshold=config["distance_diff_threshold"],
-                        close_tolerance=config["close_tolerance"],
-                    )
-                )
-                d2_opts = _as_list(
-                    dynamic_distance_to_classes(
-                        distance_classes,
-                        d2,
-                        diff_threshold=2 * config["distance_diff_threshold"],  # if you want a different rule for d2
-                        close_tolerance=config["close_tolerance"],
-                    )
-                )
-                d3_opts = _as_list(
-                    dynamic_distance_to_classes(
-                        distance_classes,
-                        d3,
-                        diff_threshold=config["distance_diff_threshold"],
-                        close_tolerance=config["close_tolerance"],
-                    )
-                )
-            elif distance_classes is not None:
-                # old static-classes behavior, if you already have some find_class()
+            if distance_classes is not None:
                 d1_opts = _as_list(find_class(distance_classes, d1))
                 d2_opts = _as_list(find_class(distance_classes, d2))
                 d3_opts = _as_list(find_class(distance_classes, d3))
             else:
-                # fallback to fixed-width value_to_class
                 d1_opts = _as_list(
                     value_to_class(
                         d1,
@@ -841,7 +652,7 @@ def find_triads(graph_data, classes, config, checks):
 
             # Checagem dos descritores que NÃO são distância (não viram lista)
             # print(config["edge_threshold"],d1_opts, d1, d2_opts, d2, d3_opts, d3)
-            prefix = (depth1_class, depth2_class, depth3_class, rsa1_class, rsa2_class, rsa3_class)
+            prefix = (rsa1_class, rsa2_class, rsa3_class)
             if None in prefix:
                 # algum descriptor obrigatório veio inválido; não há o que inserir
                 pass
@@ -1892,51 +1703,11 @@ def association_product(graph_data: list,
         "debug": debug,
         "steps": [] 
     }
-    checks = config.get("checks", {"rsa": True, "depth": True})
+    checks = config.get("checks", {"rsa": True})
     classes = config.get("classes", {})
     max_chunks = config.get("max_chunks", 5)
 
-    dynamic_dist = config.get("dynamic_distance_classes", False)
-    distance_bins = config.get("distance_bins", 5)
-    edge_threshold = config.get("edge_threshold", 10.0)
     output_path = config.get("output_path", "./outputs")
-
-    # If dynamic distance classes are enabled, build them BEFORE triads
-    if dynamic_dist:
-        logger.info("Building dynamic distance classes from all contact maps...")
-        all_dists = collect_all_distances(graph_data, edge_threshold=edge_threshold)
-        if all_dists.size == 0:
-            logger.warning("No distances found for dynamic binning; falling back to standard binning.")
-        else:
-            distance_classes = build_dynamic_distance_classes(
-                all_dists=all_dists,
-                n_bins=distance_bins,
-                edge_threshold=edge_threshold,
-            )
-            if distance_classes:
-                # Attach to classes so find_triads can use it via classes["distance"]
-                classes["distance"] = distance_classes
-                config["classes"] = classes  # keep config in sync
-                logger.info(f"Dynamic distance classes created: {len(distance_classes)} bins.")
-                # Optional: plot distribution
-                plot_distance_distribution(
-                    all_dists=all_dists,
-                    classes=distance_classes,
-                    output_path=output_path,
-                    filename="distance_distribution.png",
-                )
-                logger.info(f"Distance distribution plot saved to {output_path}/distance_distribution.png")
-            else:
-                logger.warning("Dynamic distance classes ended up empty; this should not happen.")
-
-    depths = []
-    if checks["depth"]:
-        for gd in graph_data:
-            df = gd["residue_depth"]
-            depth_dict = dict(zip(df["ResNumberChain"], df["ResidueDepth"]))
-            depths.append(
-                np.array([ depth_dict[node] for node in gd["depth_nodes"] ])
-            )
 
     graph_collection = {
         "graphs": [gd["graph"] for gd in graph_data],
@@ -1946,9 +1717,7 @@ def association_product(graph_data: list,
         "rsa_maps": [gd["rsa"] for gd in graph_data],
         "nodes_graphs": [sorted(list(gd["graph"].nodes())) for gd in graph_data]
     }
-
-    graph_collection["depths_maps"] = depths
-    
+ 
     save("association_product", "graph_collection", graph_collection)
     ranges_graph = indices_graphs(graph_collection["graphs"])
     total_length = sum(len(g.nodes()) for g in graph_collection["graphs"])
@@ -1962,7 +1731,6 @@ def association_product(graph_data: list,
         "neighbors": None,
         "rsa": None,
         "identity": None,
-        "depth": None,
         "associated": None,
         "similarity": None,
         "dm_thresholded": None,
@@ -1974,7 +1742,6 @@ def association_product(graph_data: list,
         "contact_maps": graph_collection["contact_maps"],
         "rsa_maps": graph_collection["rsa_maps"],
         "residue_maps": graph_collection["residue_maps_all"],
-        "depths_maps": graph_collection["depths_maps"],
         "nodes_graphs": graph_collection["nodes_graphs"]
     }
     

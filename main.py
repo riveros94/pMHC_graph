@@ -54,7 +54,6 @@ def load_manifest(manifest_path: str) -> Dict[str, Any]:
     S.setdefault("distance_bin_width", 2.0)
     S.setdefault("depth_bins", 5)
 
-    S.setdefault("dynamic_distance_classes", False)
     S.setdefault("distance_bins", 5)
     # S.setdefault("distance_bins", 5)
 
@@ -174,10 +173,8 @@ def main():
         "classes":                  S.get("classes", {}),
         "max_chunks":               S.get("max_chunks"),
         "rsa_table":                S.get("rsa_table", "Wilke"),
-        "dynamic_distance_classes": S.get("dynamic_distance_classes", False),
         "distance_bins":            S.get("distance_bins", 5),
         "filter_triads_by_chain":   S.get("filter_triads_by_chain", None),
-        # "output_path": passed dynamically
     }
 
     if run_mode == "all":
