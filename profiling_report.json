@@ -9,14 +9,14 @@
         {
           "chunk_idx": 0,
           "num_triads_in_chunk": 2,
-          "time_sec": 0.10681356399982178,
-          "mem_before_mb": 240.10546875,
-          "mem_after_mb": 239.96875
+          "time_sec": 0.247964313999546,
+          "mem_before_mb": 263.34765625,
+          "mem_after_mb": 268.6171875
         }
       ],
-      "time_sec": 0.10690086299837276,
-      "mem_before_mb": 240.10546875,
-      "mem_after_mb": 239.96875
+      "time_sec": 0.24805179300165037,
+      "mem_before_mb": 263.34765625,
+      "mem_after_mb": 268.6171875
     }
   ]
 }

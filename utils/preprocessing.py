@@ -273,7 +273,6 @@ def create_graphs(manifest: Dict) -> List[Tuple]:
     if not selected_files:
         raise Exception("Nenhum arquivo selecionado a partir do manifest")
 
-    print(S["include_ligands"])
     graph_config = make_default_config(
         edge_threshold=S["edge_threshold"],
         granularity=S["node_granularity"],
@@ -287,6 +286,7 @@ def create_graphs(manifest: Dict) -> List[Tuple]:
     start = time.perf_counter()
     for file_info in selected_files:
         orig_path = Path(file_info["input_path"]).resolve()
+        dest_path = Path(S["output_path"]).resolve()
         if S["exclude_waters"]:
             cleaned_name = file_info["name"]
             if cleaned_name.endswith(".pdb.gz"):
@@ -297,7 +297,7 @@ def create_graphs(manifest: Dict) -> List[Tuple]:
                 cleaned_name = cleaned_name[:-4] + "_nOH.cif"
             else:
                 cleaned_name = cleaned_name + "_nOH.pdb"
-            cleaned_path = (orig_path.parent / cleaned_name).resolve()
+            cleaned_path = (dest_path.parent / cleaned_name).resolve()
             remove_water_from_pdb(str(orig_path), str(cleaned_path))
             graph_path = cleaned_path
         else:

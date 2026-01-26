@@ -50,7 +50,7 @@ def load_manifest(manifest_path: str) -> Dict[str, Any]:
     S.setdefault("distance_std_threshold", 3.0)
     S.setdefault("distance_diff_threshold", 1.0)
 
-    S.setdefault("rsa_bin_width", 0.2)
+    S.setdefault("rsa_bin_width", 20)
     S.setdefault("distance_bin_width", 2.0)
 
     S.setdefault("max_chunks", 5)
@@ -145,7 +145,6 @@ def main():
     log.setLevel(logging.DEBUG if S.get("debug", False) else logging.INFO)
 
     checks = {
-        "depth": S.get("check_depth"),
         "rsa":   S.get("triad_rsa"),
     }
 

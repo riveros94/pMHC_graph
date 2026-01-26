@@ -828,6 +828,10 @@ class PDBGraphBuilder:
         G = nx.Graph()
         for nid, res, cent in res_tuples:
             asa, rsa = asa_rsa.get(nid, (None, None))
+
+            if node_kind[nid] != "residue":
+                print(f"[NONCAN] {nid}  RSA = {rsa}  ASA = {asa}")
+
             kind = node_kind.get(nid, "residue")
             extra = ca_cb_map.get(nid, {})
             ca_coord = extra.get("ca_coord", nan3)
