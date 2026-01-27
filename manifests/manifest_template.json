@@ -9,6 +9,8 @@
     "rsa_table": false,
     "edge_threshold": 8.5,
     "node_granularity": "ca_only",
+    "include_ligands": true,
+    "include_noncanonical_residues": true,
     "exclude_waters": true,
     "triad_rsa": false,
     "rsa_filter": 0.1,
