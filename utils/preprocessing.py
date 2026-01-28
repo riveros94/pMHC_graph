@@ -93,20 +93,6 @@ def get_exposed_residues(graph: Graph, rsa_filter = 0.1, asa_filter = 100.0, sel
     )
 
     if exposed_nodes:
-        if depth_filter:
-            valid_nodes = graph.depth.loc[graph.depth["ResidueDepth"] <= depth_filter]
-            valid_nodes_list = valid_nodes["ResNumberChain"].tolist()
-
-            def isValid(node):
-                node_split = node.split(":")
-                resChain = str(node_split[2]) + node_split[0] 
- 
-                if resChain in valid_nodes_list:
-                    return True
-                return False
-        
-            exposed_nodes[:] = [node for node in exposed_nodes if isValid(node)]
-
         graph.create_subgraph(name="s_graph", node_list=exposed_nodes, return_node_list=False)
         
         s_graph = graph.get_subgraph("s_graph")
