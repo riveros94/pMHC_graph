@@ -607,18 +607,34 @@ def find_triads(graph_data, classes, config, checks):
             rsa1 = rsa[outer_sorted[0]]*100
             rsa2 = rsa[center]*100
             rsa3 = rsa[outer_sorted[1]]*100
-                
-            if checks["rsa"]:
+
+            def _rsa_opts(val):
+                if val is None:
+                    return [None]
+                try:
+                    if np.isnan(val):
+                        return [None]
+                except TypeError:
+                    pass
+
                 if rsa_classes is not None:
-                    rsa1_class = find_class(rsa_classes, rsa1)
-                    rsa2_class = find_class(rsa_classes, rsa2)
-                    rsa3_class = find_class(rsa_classes, rsa3)
-                else:
-                    rsa1_class = _as_list(value_to_class(rsa1, config["rsa_bin_width"], config["rsa_filter"]*100, inverse=True, close_tolerance=config["close_tolerance_rsa"]))
-                    rsa2_class = _as_list(value_to_class(rsa2, config["rsa_bin_width"], config["rsa_filter"]*100, inverse=True, close_tolerance=config["close_tolerance_rsa"]))
-                    rsa3_class = _as_list(value_to_class(rsa3, config["rsa_bin_width"], config["rsa_filter"]*100, inverse=True, close_tolerance=config["close_tolerance_rsa"]))
+                    return _as_list(find_class(rsa_classes, val))
+                return _as_list(
+                    value_to_class(
+                        val,
+                        config["rsa_bin_width"],
+                        config["rsa_filter"] * 100,
+                        inverse=True,
+                        close_tolerance=config["close_tolerance_rsa"],
+                    )
+                )
+
+            if checks["rsa"]:
+                rsa1_opts = _rsa_opts(rsa1)
+                rsa2_opts = _rsa_opts(rsa2)
+                rsa3_opts = _rsa_opts(rsa3)
             else:
-                rsa1_class, rsa2_class, rsa3_class = 0, 0, 0
+                rsa1_opts, rsa2_opts, rsa3_opts = [None], [None], [None]
 
             if distance_classes is not None:
                 d1_opts = _as_list(find_class(distance_classes, d1))
@@ -650,36 +666,27 @@ def find_triads(graph_data, classes, config, checks):
                     )
                 )
 
-            # Checagem dos descritores que NÃO são distância (não viram lista)
-            # print(config["edge_threshold"],d1_opts, d1, d2_opts, d2, d3_opts, d3)
-            prefix = (rsa1_class, rsa2_class, rsa3_class)
-            if None in prefix:
-                # algum descriptor obrigatório veio inválido; não há o que inserir
-                pass
-            else:
-                # Se qualquer distância não tem classe possível, não gera combinação
-                if d1_opts and d2_opts and d3_opts:
-                    for d1_c, d2_c, d3_c in product(d1_opts, d2_opts, d3_opts):
-                        full_describer = (chi, rsa1_class, rsa2_class, rsa3_class, d1_c, d2_c, d3_c)
-                        full_describer_absolute = (chi, rsa1_class, rsa2_class, rsa3_class, d1, d2, d3)
+            if d1_opts and d2_opts and d3_opts:
+                for d1_c, d2_c, d3_c, rsa1_class, rsa2_class, rsa3_class in product(d1_opts, d2_opts, d3_opts, rsa1_opts, rsa2_opts, rsa3_opts):
+                    full_describer = (chi, rsa1_class, rsa2_class, rsa3_class, d1_c, d2_c, d3_c)
+                    full_describer_absolute = (chi, rsa1_class, rsa2_class, rsa3_class, d1, d2, d3)
 
-                        triad_class = [u_res_class, center_res_class, w_res_class]
-                        triad_abs = [outer_sorted[0], center, outer_sorted[1]]
-                        triad_token = (*triad_class, *full_describer)
-                        triad_full = (*triad_abs, *full_describer)
-                        triad_absolute = (*triad_abs, *full_describer_absolute)
-                        if triad_token not in triads:
-                            triads[triad_token] = {
-                                "count": 1,
-                                "triads_full": [triad_full],
-                                "triads_absolute": [triad_absolute]
-                            }
-                        else:
-                            triads[triad_token]["count"] += 1
-                            triads[triad_token]["triads_full"].append(triad_full)
-                            triads[triad_token]["triads_absolute"].append(triad_absolute)
-            # else:
-                # logging.debug(f"None Found: ({outer_sorted[0], center, outer_sorted[1], d1, d2, d3} | {full_describer}")
+                    triad_class = [u_res_class, center_res_class, w_res_class]
+                    triad_abs = [outer_sorted[0], center, outer_sorted[1]]
+                    triad_token = (*triad_class, *full_describer)
+                    triad_full = (*triad_abs, *full_describer)
+                    triad_absolute = (*triad_abs, *full_describer_absolute)
+
+                    if triad_token not in triads:
+                        triads[triad_token] = {
+                            "count": 1,
+                            "triads_full": [triad_full],
+                            "triads_absolute": [triad_absolute]
+                        }
+                    else:
+                        triads[triad_token]["count"] += 1
+                        triads[triad_token]["triads_full"].append(triad_full)
+                        triads[triad_token]["triads_absolute"].append(triad_absolute)
     n_triad = 0
     counters = {}
     for triad, data in triads.items():
@@ -688,7 +695,6 @@ def find_triads(graph_data, classes, config, checks):
         triads_full = data["triads_absolute"]
         data["triads_absolute_d1"] = sorted(triads_full, key=lambda r: r[-3])
 
-        # if triads[triad]["count"] > 2: print(triad, triads[triad]["count"] )
         if triads[triad]["count"] not in counters.keys():
             counters[triads[triad]["count"]] = 1
         else:

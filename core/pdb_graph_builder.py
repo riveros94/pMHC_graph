@@ -234,7 +234,7 @@ class PDBGraphBuilder:
 
     def _compute_asa_rsa(
         self, res_tuples: List[Tuple[str, Residue, np.ndarray]]
-    ) -> Tuple[Dict[str, Tuple[float, float]], Optional[pd.DataFrame]]:
+    ) -> Tuple[Dict[str, Tuple[float, Optional[float]]], Optional[pd.DataFrame]]:
         """
         Compute per-residue ASA and RSA.
 
@@ -274,6 +274,8 @@ class PDBGraphBuilder:
 
         asa_ref = float(_asa_ref_from_structure())
 
+        out: Dict[str, Tuple[float, Optional[float]]] = {}
+
         if self.config.rsa_method == "dssp":
             model = self.structure[self.config.model_index]
 
@@ -285,7 +287,6 @@ class PDBGraphBuilder:
             )
             idx2nid = {(res.get_parent().id, res.id): nid for nid, res, _ in res_tuples}
             rows: List[Dict[str, object]] = []
-            out: Dict[str, Tuple[float, float]] = {}
 
             for key in dssp.keys():
                 nid = idx2nid.get(key)
@@ -336,28 +337,39 @@ class PDBGraphBuilder:
                 asa_abs = float(getattr(res, "sasa", 0.0))
                 resname = res.get_resname().strip().upper()
                 aa_can = _canonical_of(resname)
+
                 if aa_can is not None:
                     max_acc = float(max_acc_table.get(aa_can, 0.0))
-                    rsa_rel = (asa_abs / max_acc) if max_acc > 0 else min(1.0, asa_abs / asa_ref)
+                    if max_acc > 0:
+                        rsa_rel = asa_abs / max_acc
+                    else:
+                        rsa_rel = None
                 else:
-                    rsa_rel = min(1.0, asa_abs / asa_ref)
-                out[nid] = (asa_abs, float(rsa_rel))
+                    rsa_rel = None
+
+                out[nid] = (asa_abs, None if rsa_rel is None else float(rsa_rel))
+
             return out, dssp_df
 
         # SR-only path
-        out: Dict[str, Tuple[float, float]] = {}
         for nid, res, _ in res_tuples:
             asa = float(getattr(res, "sasa", 0.0))
             aa3 = res.get_resname().strip().upper()
             aa_can = _canonical_of(aa3)
+
             if aa_can is not None:
                 max_acc = float(max_acc_table.get(aa_can, 0.0))
-                rsa = (asa / max_acc) if max_acc > 0 else min(1.0, asa / asa_ref)
+                if max_acc > 0:
+                    rsa = asa / max_acc
+                else:
+                    rsa = None
             else:
-                rsa = min(1.0, asa / asa_ref)
-            out[nid] = (asa, float(rsa))
+                rsa = None
+
+            out[nid] = (asa, None if rsa is None else float(rsa))
+
         return out, None
-    
+   
     def _centroid_mask_for_group(self, g: pd.DataFrame) -> pd.Series:
         """
         Return a boolean mask selecting which atoms of a residue group `g` are
@@ -811,7 +823,7 @@ class PDBGraphBuilder:
         if not res_tuples:
             raise ValueError("No protein residues found for the selected chains.")
 
-        asa_rsa: Dict[str, Tuple[float, float]] = {}
+        asa_rsa: Dict[str, Tuple[float, Optional[float]]] = {}
         dssp_df: Optional[pd.DataFrame] = None
         if self.config.compute_rsa:
             if res_tuples:
@@ -828,6 +840,10 @@ class PDBGraphBuilder:
         G = nx.Graph()
         for nid, res, cent in res_tuples:
             asa, rsa = asa_rsa.get(nid, (None, None))
+
+            if node_kind[nid] != "residue":
+                print(f"[NONCAN] {nid}  RSA = {rsa}  ASA = {asa}")
+
             kind = node_kind.get(nid, "residue")
             extra = ca_cb_map.get(nid, {})
             ca_coord = extra.get("ca_coord", nan3)

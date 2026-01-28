@@ -676,7 +676,7 @@ def extract_subgraph_from_secondary_structure(
     )
 
 
-def extract_surface_subgraph(
+def extract_surface_subgraph_rsa(
     g: nx.Graph,
     rsa_threshold: float = 0.2,
     inverse: bool = False,
@@ -786,6 +786,71 @@ def extract_surface_subgraph(
     )
 
 
+def extract_surface_subgraph_asa(
+    g: nx.Graph,
+    asa_threshold: float,
+    inverse: bool = False,
+    filter_dataframe: bool = True,
+    recompute_distmat: bool = False,
+    update_coords: bool = True,
+    return_node_list: bool = False,
+) -> Union[nx.Graph, List[str], None]:
+    """
+    Select nodes by absolute solvent accessibility (ASA).
+
+    Parameters
+    ----------
+    g : nx.Graph
+        Input graph. Nodes are expected to carry 'asa' (float, in Å^2).
+    asa_threshold : float
+        Minimum ASA to include.
+    inverse : bool, default=False
+        If True, include ASA < threshold.
+    filter_dataframe : bool, default=True
+        Filter graph-level DataFrames to subgraph nodes.
+    recompute_distmat : bool, default=False
+        Recompute `graph['dist_mat']` from `pdb_df` if available.
+    update_coords : bool, default=True
+        Rebuild `graph['coords']` from node attributes.
+    return_node_list : bool, default=False
+        If True, return the resolved node list instead of a subgraph.
+
+    Returns
+    -------
+    nx.Graph or list of str
+        Subgraph or node list.
+    """
+    node_list: List[str] = []
+    thr = float(asa_threshold)
+
+    for n, d in g.nodes(data=True):
+        asa = d.get("asa", None)
+        if asa is None:
+            continue
+
+        try:
+            asa_f = float(asa)
+        except Exception:
+            continue
+
+        include = (asa_f >= thr)
+        if inverse:
+            include = not include
+
+        if include:
+            node_list.append(n)
+
+    node_list = list(dict.fromkeys(node_list))
+
+    return extract_subgraph_from_node_list(
+        g,
+        node_list=node_list,
+        filter_dataframe=filter_dataframe,
+        update_coords=update_coords,
+        recompute_distmat=recompute_distmat,
+        inverse=False,
+        return_node_list=return_node_list,
+    )
 
 def extract_k_hop_subgraph(
     g: nx.Graph,
@@ -921,6 +986,7 @@ def extract_subgraph(
     radius: Optional[float] = None,
     ss_elements: Optional[List[str]] = None,
     rsa_threshold: Optional[float] = None,
+    asa_threshold: Optional[float] = None,
     k_hop_central_node: Optional[str] = None,
     k_hops: Optional[int] = None,
     k_only: Optional[bool] = None,
@@ -1003,8 +1069,13 @@ def extract_subgraph(
             g, ss_elements, return_node_list=True
         ))
     if rsa_threshold is not None:
-        node_list += _ensure_list_str(extract_surface_subgraph(
+        node_list += _ensure_list_str(extract_surface_subgraph_rsa(
             g, rsa_threshold, return_node_list=True
+        ))
+
+    if asa_threshold is not None:
+        node_list += _ensure_list_str(extract_surface_subgraph_asa(
+            g, asa_threshold, return_node_list=True
         ))
     if k_hop_central_node is not None and k_hops and k_only is not None:
         node_list += _ensure_list_str(extract_k_hop_subgraph(

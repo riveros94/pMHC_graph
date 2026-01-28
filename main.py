@@ -46,11 +46,12 @@ def load_manifest(manifest_path: str) -> Dict[str, Any]:
 
     S.setdefault("triad_rsa", False)
     S.setdefault("rsa_filter", 0.1)
+    S.setdefault("asa_filter", 100)
     S.setdefault("close_tolerance_rsa", 0.1)
     S.setdefault("distance_std_threshold", 3.0)
     S.setdefault("distance_diff_threshold", 1.0)
 
-    S.setdefault("rsa_bin_width", 0.2)
+    S.setdefault("rsa_bin_width", 20)
     S.setdefault("distance_bin_width", 2.0)
 
     S.setdefault("max_chunks", 5)
@@ -145,7 +146,6 @@ def main():
     log.setLevel(logging.DEBUG if S.get("debug", False) else logging.INFO)
 
     checks = {
-        "depth": S.get("check_depth"),
         "rsa":   S.get("triad_rsa"),
     }
 
@@ -158,9 +158,7 @@ def main():
         "distance_std_threshold":   S.get("distance_std_threshold"),
         "distance_diff_threshold":  S.get("distance_diff_threshold"),
         "rsa_filter":               S.get("rsa_filter"),
-        "depth_filter":             S.get("depth_filter"),
         "rsa_bin_width":            S.get("rsa_bin_width"),
-        "depth_bins":               S.get("depth_bins"),
         "distance_bin_width":       S.get("distance_bin_width"),
         "close_tolerance":          S.get("close_tolerance"),
         "close_tolerance_rsa":      S.get("close_tolerance_rsa"),
