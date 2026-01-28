@@ -46,13 +46,10 @@ def remove_water_from_pdb(source_file, dest_file):
 
     logger.debug(f"Saved cleaned structure without waters: {dest_file}")
     
-def get_exposed_residues(graph: Graph, rsa_filter=0.1, depth_filter: Union[float, None]=10.0, selection_params=None) -> nx.Graph:
+def get_exposed_residues(graph: Graph, rsa_filter = 0.1, asa_filter = 100.0, selection_params=None) -> nx.Graph:
     selection_params = selection_params or {}
 
-    if rsa_filter is None:
-        graph.create_subgraph(name="exposed_residues")
-    else:
-        graph.create_subgraph(name="exposed_residues", rsa_threshold=rsa_filter)
+    graph.create_subgraph(name="exposed_residues", rsa_threshold=rsa_filter, asa_threshold=asa_filter)
     
     if not any(key in selection_params for key in ("chains", "residues")):
         expo = graph.get_subgraph(name="exposed_residues")
@@ -309,8 +306,17 @@ def create_graphs(manifest: Dict) -> List[Tuple]:
         subgraph = get_exposed_residues(
             graph=graph_instance,
             rsa_filter=S.get("rsa_filter"),
-            depth_filter=S.get("depth_filter") if S.get("depth_check") else None,
+            asa_filter=S.get("asa_filter"),
             selection_params=selection_params or {},
+        )
+
+        sub_dir = output_path / "filtered_graphs"
+        base_name = Path(orig_path).stem
+        graph_instance.save_subgraph_view(
+            g=subgraph,
+            output_dir=sub_dir,
+            name=f"{base_name}_filtered",
+            with_html=True,
         )
 
         save("create_graphs", f"{graph_path.stem}_subgraph", subgraph)

@@ -607,16 +607,32 @@ def find_triads(graph_data, classes, config, checks):
             rsa1 = rsa[outer_sorted[0]]*100
             rsa2 = rsa[center]*100
             rsa3 = rsa[outer_sorted[1]]*100
-                
-            if checks["rsa"]:
+
+            def _rsa_opts(val):
+                if val is None:
+                    return [None]
+                try:
+                    if np.isnan(val):
+                        return [None]
+                except TypeError:
+                    pass
+
                 if rsa_classes is not None:
-                    rsa1_opts = find_class(rsa_classes, rsa1)
-                    rsa2_opts = find_class(rsa_classes, rsa2)
-                    rsa3_opts = find_class(rsa_classes, rsa3)
-                else:
-                    rsa1_opts = _as_list(value_to_class(rsa1, config["rsa_bin_width"], config["rsa_filter"]*100, inverse=True, close_tolerance=config["close_tolerance_rsa"]))
-                    rsa2_opts= _as_list(value_to_class(rsa2, config["rsa_bin_width"], config["rsa_filter"]*100, inverse=True, close_tolerance=config["close_tolerance_rsa"]))
-                    rsa3_opts = _as_list(value_to_class(rsa3, config["rsa_bin_width"], config["rsa_filter"]*100, inverse=True, close_tolerance=config["close_tolerance_rsa"]))
+                    return _as_list(find_class(rsa_classes, val))
+                return _as_list(
+                    value_to_class(
+                        val,
+                        config["rsa_bin_width"],
+                        config["rsa_filter"] * 100,
+                        inverse=True,
+                        close_tolerance=config["close_tolerance_rsa"],
+                    )
+                )
+
+            if checks["rsa"]:
+                rsa1_opts = _rsa_opts(rsa1)
+                rsa2_opts = _rsa_opts(rsa2)
+                rsa3_opts = _rsa_opts(rsa3)
             else:
                 rsa1_opts, rsa2_opts, rsa3_opts = [None], [None], [None]
 

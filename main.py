@@ -46,6 +46,7 @@ def load_manifest(manifest_path: str) -> Dict[str, Any]:
 
     S.setdefault("triad_rsa", False)
     S.setdefault("rsa_filter", 0.1)
+    S.setdefault("asa_filter", 100)
     S.setdefault("close_tolerance_rsa", 0.1)
     S.setdefault("distance_std_threshold", 3.0)
     S.setdefault("distance_diff_threshold", 1.0)

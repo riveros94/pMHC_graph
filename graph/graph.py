@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import json
 from core.config import GraphConfig, make_default_config
 from core.pipeline import build_graph_with_config
 from core.subgraphs import extract_subgraph
@@ -123,6 +124,260 @@ class Graph:
                 return self.subgraphs[name].nodes
         else:
             print("Some of your subgraph isn't in the subgraph list")
+
+    def to_raw_dict(self) -> Dict[str, Any]:
+        """
+        Representação serializável do grafo bruto desta proteína.
+        Só usa strings, sem objetos Python estranhos.
+        """
+        g = self.graph
+
+        nodes = [str(n) for n in g.nodes()]
+        edges = [[str(u), str(v)] for u, v in g.edges()]
+        neighbors = {
+            str(n): [str(nb) for nb in g.neighbors(n)]
+            for n in g.nodes()
+        }
+
+        return {
+            "graph_path": self.graph_path,
+            "nodes": nodes,
+            "edges": edges,
+            "neighbors": neighbors,
+        }
+    def _nx_to_serializable(self, g: nx.Graph) -> Dict[str, Any]:
+        """
+        Converte um nx.Graph qualquer em um dicionário simples
+        com nodes, edges e vizinhos, tudo como string.
+        Serve tanto para o grafo bruto quanto para subgrafos filtrados.
+        """
+        nodes = [str(n) for n in g.nodes()]
+        edges = [[str(u), str(v)] for u, v in g.edges()]
+        neighbors = {
+            str(n): [str(nb) for nb in g.neighbors(n)]
+            for n in g.nodes()
+        }
+
+        return {
+            "graph_path": self.graph_path,
+            "nodes": nodes,
+            "edges": edges,
+            "neighbors": neighbors,
+        }
+
+    def save_subgraph_view(
+        self,
+        g: nx.Graph,
+        output_dir: Union[str, Path],
+        name: str,
+        with_html: bool = True,
+    ) -> None:
+        out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        base = name
+
+        # JSON "cru" do grafo
+        data = self._nx_to_serializable(g)
+        json_path = out_dir / f"{base}.json"
+        json_path.write_text(json.dumps(data, indent=4), encoding="utf-8")
+        log.info(f"Subgraph JSON salvo em {json_path}")
+
+        if not with_html:
+            return
+
+        # trabalhar em uma cópia para o HTML
+        graph = g.copy()
+
+        # chain_id + attrs mínimos para PyVis
+        for n in graph.nodes():
+            label = str(n)
+            chain_id = label.split(":")[0] if ":" in label else "?"
+            graph.nodes[n]["chain_id"] = chain_id
+            graph.nodes[n]["label"] = label
+            graph.nodes[n]["title"] = f"chain: {chain_id}\n{label}"
+            graph.nodes[n]["size"] = 12
+            graph.nodes[n]["group"] = chain_id
+
+        chain_ids = sorted({data.get("chain_id", "?") for _, data in graph.nodes(data=True)})
+        cmap = plt.cm.get_cmap("tab10", max(1, len(chain_ids)))
+        palette = {cid: _rgba_to_hex(cmap(idx)) for idx, cid in enumerate(chain_ids)}
+
+        for n in graph.nodes():
+            cid = graph.nodes[n].get("chain_id", "?")
+            graph.nodes[n]["color"] = palette.get(cid, "#999999")
+
+        # LIMPEZA: deixar só atributos serializáveis básicos
+        allowed_node_keys = {"label", "title", "color", "size", "group", "chain_id"}
+        for n, data_node in graph.nodes(data=True):
+            for k in list(data_node.keys()):
+                if k not in allowed_node_keys:
+                    del data_node[k]
+
+        # edges: só manter weight numérica (se existir) e limpar o resto
+        for u, v, data_edge in graph.edges(data=True):
+            w = data_edge.get("weight")
+            for k in list(data_edge.keys()):
+                if k != "weight":
+                    del data_edge[k]
+            if not isinstance(w, (int, float)):
+                if "weight" in data_edge:
+                    del data_edge["weight"]
+
+        # renomear nós para ids simples
+        safe_map = {n: f"v{idx}" for idx, n in enumerate(graph.nodes())}
+        H = nx.relabel_nodes(graph, safe_map, copy=True)
+
+        net = Network(
+            height="800px",
+            width="100%",
+            bgcolor="#ffffff",
+            notebook=False,
+            cdn_resources="in_line",
+            directed=graph.is_directed(),
+        )
+        net.from_nx(H)
+
+        # hover de weight continua ok, porque agora só existe weight numérica
+        for (u, v, data) in H.edges(data=True):
+            w = data.get("weight")
+            if w is not None:
+                title = f"weight: {w}"
+                for e in net.edges:
+                    if (e["from"] == u and e["to"] == v) or (
+                        not graph.is_directed() and e["from"] == v and e["to"] == u
+                    ):
+                        e["title"] = title
+                        if isinstance(w, (int, float)):
+                            e.setdefault("value", float(w))
+
+        net.set_options("""
+        {
+          "nodes": { "shape": "dot" },
+          "interaction": { "hover": true, "tooltipDelay": 150, "zoomView": true, "dragView": true },
+          "physics": {
+            "enabled": true,
+            "solver": "barnesHut",
+            "barnesHut": {
+              "gravitationalConstant": -8000,
+              "centralGravity": 0.3,
+              "springLength": 95,
+              "springConstant": 0.04,
+              "damping": 0.09,
+              "avoidOverlap": 0.1
+            },
+            "minVelocity": 0.75
+          }
+        }
+        """)
+
+        html_path = out_dir / f"{base}.html"
+        html = net.generate_html(notebook=False, local=True)
+        html_path.write_text(html, encoding="utf-8")
+        log.info(f"Subgraph HTML salvo em {html_path}")
+
+    def save_raw_graph(
+        self,
+        output_dir: Union[str, Path],
+        name: Optional[str] = None,
+        with_html: bool = True,
+    ) -> None:
+        """
+        Salva o grafo bruto desta proteína como:
+          - JSON: <name>_raw_graph.json
+          - HTML PyVis: <name>_raw_graph.html (se with_html=True)
+        """
+        out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        base = name or Path(self.graph_path).stem
+
+        # JSON
+        data = self.to_raw_dict()
+        json_path = out_dir / f"{base}_raw_graph.json"
+        json_path.write_text(json.dumps(data, indent=4), encoding="utf-8")
+        log.info(f"Raw graph JSON salvo em {json_path}")
+
+        if not with_html:
+            return
+
+        # HTML PyVis, reaproveitando a lógica do draw_graph_interactive
+        g = self.graph.copy()
+
+        # chain_id simples a partir do rótulo
+        for n in g.nodes():
+            label = str(n)
+            chain_id = label.split(':')[0] if ':' in label else "?"
+            g.nodes[n]["chain_id"] = chain_id
+
+        chain_ids = sorted({data.get("chain_id", "?") for _, data in g.nodes(data=True)})
+        cmap = plt.cm.get_cmap("tab10", max(1, len(chain_ids)))
+        palette = {cid: _rgba_to_hex(cmap(idx)) for idx, cid in enumerate(chain_ids)}
+
+        # atributos de nó para PyVis
+        for n in g.nodes():
+            cid = g.nodes[n].get("chain_id", "?")
+            label = str(n)
+            g.nodes[n]["label"] = label
+            g.nodes[n]["title"] = f"chain: {cid}\n{label}"
+            g.nodes[n]["color"] = palette.get(cid, "#999999")
+            g.nodes[n]["size"] = 12
+            g.nodes[n]["group"] = cid
+
+        # renomear nós para ids simples
+        safe_map = {n: f"v{idx}" for idx, n in enumerate(g.nodes())}
+        H = nx.relabel_nodes(g, safe_map, copy=True)
+
+        net = Network(
+            height="800px",
+            width="100%",
+            bgcolor="#ffffff",
+            notebook=False,
+            cdn_resources="in_line",
+            directed=g.is_directed(),
+        )
+        net.from_nx(H)
+
+        # hover com peso se tiver
+        for (u, v, data) in H.edges(data=True):
+            w = data.get("weight")
+            if w is not None:
+                title = f"weight: {w}"
+                for e in net.edges:
+                    if (e["from"] == u and e["to"] == v) or (
+                        not g.is_directed() and e["from"] == v and e["to"] == u
+                    ):
+                        e["title"] = title
+                        if isinstance(w, (int, float)):
+                            e.setdefault("value", float(w))
+                        else:
+                            e.setdefault("value", 1.0)
+
+        net.set_options("""
+        {
+          "nodes": { "shape": "dot" },
+          "interaction": { "hover": true, "tooltipDelay": 150, "zoomView": true, "dragView": true },
+          "physics": {
+            "enabled": true,
+            "solver": "barnesHut",
+            "barnesHut": {
+              "gravitationalConstant": -8000,
+              "centralGravity": 0.3,
+              "springLength": 95,
+              "springConstant": 0.04,
+              "damping": 0.09,
+              "avoidOverlap": 0.1
+            },
+            "minVelocity": 0.75
+          }
+        }
+        """)
+
+        html_path = out_dir / f"{base}_raw_graph.html"
+        html = net.generate_html(notebook=False, local=True)
+        html_path.write_text(html, encoding="utf-8")
+        log.info(f"Raw graph HTML salvo em {html_path}")
+
 
 class AssociatedGraph:
     """Handles the association of multiple protein graphs."""
