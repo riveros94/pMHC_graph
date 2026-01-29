@@ -169,7 +169,6 @@ def main():
         "classes":                  S.get("classes", {}),
         "max_chunks":               S.get("max_chunks"),
         "rsa_table":                S.get("rsa_table", "Wilke"),
-        "distance_bins":            S.get("distance_bins", 5),
         "filter_triads_by_chain":   S.get("filter_triads_by_chain", None),
     }
 
