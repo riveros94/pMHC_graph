@@ -34,7 +34,7 @@ def _eval_logic_expression(expr: str,
     if not expr or not expr.strip():
         raise LogicError("Empty logic expression")
 
-    tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]*|[()!&|]", expr.replace(" ", ""))
+    tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_:]*|[()!&|]", expr.replace(" ", ""))
     prec = {"!": 3, "&": 2, "|": 1}
     right_assoc = {"!"}
     output = []
@@ -126,8 +126,7 @@ def get_exposed_residues(graph: Graph, rsa_filter = 0.1, asa_filter = 100.0, sel
     selection_params = selection_params or {}
     logic_expr = selection_params.get("logic")
 
-    graph.create_subgraph(name="exposed_residues", rsa_threshold=rsa_filter, asa_threshold=asa_filter)
-    
+    graph.create_subgraph(name="exposed_residues", rsa_threshold=rsa_filter, asa_threshold=asa_filter) 
     exposed = graph.get_subgraph("exposed_residues")
     if exposed is None or exposed.number_of_nodes() == 0:
         raise Exception("No exposed residues found")
@@ -136,6 +135,7 @@ def get_exposed_residues(graph: Graph, rsa_filter = 0.1, asa_filter = 100.0, sel
     sets["exposed"] = set(exposed.nodes())
 
     universe = set(graph.graph.nodes())
+    G = graph.graph
 
     if "chains" in selection_params:
         chains_cfg = selection_params["chains"]
@@ -143,36 +143,65 @@ def get_exposed_residues(graph: Graph, rsa_filter = 0.1, asa_filter = 100.0, sel
             raise TypeError(f"`chains` must be list, got {type(chains_cfg)}")
         graph.create_subgraph(name="selected_chains", chains=chains_cfg)
         chains_sub = graph.get_subgraph("selected_chains")
+        base_nodes = set(chains_sub.nodes()) if chains_sub is not None else set()
         sets["chains"] = set(chains_sub.nodes()) if chains_sub is not None else set()
+
+        by_chain: Dict[str, set] = {}
+        for n in base_nodes:
+            d = G.nodes[n]
+            cid = d.get("chain_id") or d.get("chain")
+            if cid is None:
+                continue
+            by_chain.setdefault(cid, set()).add(n)
+        for cid, nodes in by_chain.items():
+            sets[f"chains:{cid}"] = nodes
 
     if "residues" in selection_params:
         residues_cfg = selection_params["residues"]
         if not isinstance(residues_cfg, dict):
             raise TypeError(f"`residues` must be dict, got {type(residues_cfg)}")
 
-        residue_positions = []
-        for chain, positions in residues_cfg.items():
-            if not isinstance(positions, list):
-                raise TypeError(
-                    f"Value for chain '{chain}' in residues must be a list, got {type(positions)}"
-                )
-            residue_positions.extend(positions)
+        selected_nodes: List[str] = []
+        per_chain: Dict[str, set] = {}
 
-        graph.create_subgraph(name="selected_residues",
-                              sequence_positions=residue_positions)
-        r_sub = graph.get_subgraph("selected_residues")
-        sets["residues"] = set(r_sub.nodes()) if r_sub is not None else set()
+        for n, d in G.nodes(data=True):
+            cid = d.get("chain_id") or d.get("chain")
+            rnum = d.get("residue_number") or d.get("resseq")
+            if cid is None or rnum is None:
+                continue
+            if cid in residues_cfg and rnum in residues_cfg[cid]:
+                selected_nodes.append(n)
+                per_chain.setdefault(cid, set()).add(n)
+
+        if selected_nodes:
+            graph.create_subgraph(
+                name="selected_residues_nodes",
+                node_list=selected_nodes,
+                return_node_list=False,
+            )
+        sets["residues"] = set(selected_nodes)
+
+        for cid, nodes in per_chain.items():
+            sets[f"residues:{cid}"] = nodes
 
     if "structures" in selection_params:
-        print(f"Entrei em structures: {selection_params}")
         structures_cfg = selection_params["structures"]
 
         if isinstance(structures_cfg, list):
-            print(f"structures_cfg: {structures_cfg}")
-            graph.create_subgraph(name="selected_structures",
-                                  ss_elements=structures_cfg)
+            graph.create_subgraph(name="selected_structures", ss_elements=structures_cfg)
             s_sub = graph.get_subgraph("selected_structures")
-            sets["structures"] = set(s_sub.nodes()) if s_sub is not None else set()
+            base_nodes = set(s_sub.nodes()) if s_sub is not None else set()
+            sets["structures"] = base_nodes
+
+            by_chain: Dict[str, set] = {}
+            for n in base_nodes:
+                d = G.nodes[n]
+                cid = d.get("chain_id") or d.get("chain")
+                if cid is None:
+                    continue
+                by_chain.setdefault(cid, set()).add(n)
+            for cid, nodes in by_chain.items():
+                sets[f"structures:{cid}"] = nodes
 
         elif isinstance(structures_cfg, dict):
             allowed_by_chain = {
@@ -182,8 +211,9 @@ def get_exposed_residues(graph: Graph, rsa_filter = 0.1, asa_filter = 100.0, sel
             }
             default_structs = set(structures_cfg.get("*", []))
 
-            G = graph.graph
-            selected_nodes = []
+            selected_nodes: List[str] = []
+            per_chain: Dict[str, set] = {}
+
             for n, d in G.nodes(data=True):
                 label = str(n)
                 parts = label.split(":")
@@ -198,24 +228,34 @@ def get_exposed_residues(graph: Graph, rsa_filter = 0.1, asa_filter = 100.0, sel
                 ss = d.get("ss", None)
                 if ss in allowed_ss:
                     selected_nodes.append(n)
+                    per_chain.setdefault(chain_id, set()).add(n)
 
-            graph.create_subgraph(name="selected_structures_nodes",
-                                  node_list=selected_nodes,
-                                  return_node_list=False)
+            if selected_nodes:
+                graph.create_subgraph(
+                    name="selected_structures_nodes",
+                    node_list=selected_nodes,
+                    return_node_list=False,
+                )
             sets["structures"] = set(selected_nodes)
-
+            for cid, nodes in per_chain.items():
+                sets[f"structures:{cid}"] = nodes
         else:
             raise TypeError(
                 f"`structures` must be list or dict, got {type(structures_cfg)}"
             )
 
     if not logic_expr:
-        union_sets = []
+        union_sets: List[set] = []
         for key in ("residues", "chains", "structures"):
-            if key in sets:
-                union_sets.append(sets[key])
-        selected_union = set.union(*union_sets)
-        selected = sets["exposed"].intersection(*selected_union) if selected_union else sets["exposed"]
+            s = sets.get(key)
+            if s:
+                union_sets.append(s)
+
+        if union_sets:
+            combined = set().union(*union_sets)
+            selected = sets["exposed"] & combined
+        else:
+            selected = sets["exposed"]
     else:
         selected = _eval_logic_expression(logic_expr, sets, universe)
         if "exposed" in sets and "exposed" not in logic_expr:
@@ -272,30 +312,24 @@ def _merge_constraints(base: Dict[str, Any], add: Dict[str, Any]) -> Dict[str, A
         field is preserved either as a list or as a dict; mixing both
         representations across inputs is not allowed and raises TypeError.
     """
-    # out: Dict[str, Any] = {
-    #     "chains": [],
-    #     "residues": {},
-    #     "structures": None,
-    # }
-    
-    out: Dict[str, Any] = {}
+    out: Dict[str, Any] = {
+        "chains": [],
+        "residues": {},
+        "structures": None,
+    }
+
     for src in (base or {}, add or {}):
-        chains = src.get("chains") or []
-        if chains: out["chains"] = []
-        for c in chains:
+        for c in src.get("chains") or []:
             if c not in out["chains"]:
                 out["chains"].append(c)
 
-        residues = src.get("residues") or {}
-        if residues: out["residues"] = {}
-        for ch, positions in residues.items():
+        for ch, positions in (src.get("residues") or {}).items():
             lst = out["residues"].setdefault(ch, [])
             for p in positions:
                 if p not in lst:
                     lst.append(p)
 
         structures = src.get("structures", None)
-        if structures: out["structures"] = None
         if structures is None:
             continue
 
