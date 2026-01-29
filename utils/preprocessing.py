@@ -210,13 +210,13 @@ def get_exposed_residues(graph: Graph, rsa_filter = 0.1, asa_filter = 100.0, sel
             )
 
     if not logic_expr:
-        selected = set(sets["exposed"])
-        if "residues" in sets:
-            selected = selected.intersection(sets["residues"])
-        if "structures" in sets:
-            selected = selected.intersection(sets["structures"])
-        if "chains" in sets:
-            selected = selected.union(sets["chains"])
+        union_sets = []
+        print(f"sets: {sets}")
+        for key in ("residues", "chains", "structures"):
+            if key in sets:
+                union_sets.append(sets[key])
+        selected_union = set.union(*union_sets)
+        selected = sets["exposed"].intersection(*selected_union) if selected_union else sets["exposed"]
     else:
         selected = _eval_logic_expression(logic_expr, sets, universe)
         if "exposed" in sets and "exposed" not in logic_expr:
