@@ -18,9 +18,86 @@ from core.config import make_default_config
 from core.tracking import save
 import gemmi
 import os
+import re
 
 logger = logging.getLogger("Preprocessing")
 
+class LogicError(Exception):
+    """Logic error while evaluating boolean set expression."""
+    pass
+
+
+def _eval_logic_expression(expr: str,
+                           sets: Dict[str, set],
+                           universe: set) -> set:
+    """Evaluate a boolean expression over named sets using &, |, ! and parentheses."""
+    if not expr or not expr.strip():
+        raise LogicError("Empty logic expression")
+
+    tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]*|[()!&|]", expr.replace(" ", ""))
+    print(f"tokens: {tokens} | sets: {sets} | expr: {expr}")
+    prec = {"!": 3, "&": 2, "|": 1}
+    right_assoc = {"!"}
+    output = []
+    stack = []
+
+    for t in tokens:
+        if re.match(r"[A-Za-z_][A-Za-z0-9_]*", t):
+            if t not in sets:
+                raise LogicError(f"Unknown set name in logic: {t!r}")
+            output.append(t)
+        elif t in ("!", "&", "|"):
+            while stack:
+                top = stack[-1]
+                if top in prec and (
+                    prec[top] > prec[t] or
+                    (prec[top] == prec[t] and t not in right_assoc)
+                ):
+                    output.append(stack.pop())
+                else:
+                    break
+            stack.append(t)
+        elif t == "(":
+            stack.append(t)
+        elif t == ")":
+            while stack and stack[-1] != "(":
+                output.append(stack.pop())
+            if not stack:
+                raise LogicError("Mismatched parentheses")
+            stack.pop()
+        else:
+            raise LogicError(f"Invalid token in logic: {t!r}")
+
+    while stack:
+        top = stack.pop()
+        if top in ("(", ")"):
+            raise LogicError("Mismatched parentheses at end")
+        output.append(top)
+
+    st: list[set] = []
+    for t in output:
+        if t in ("!", "&", "|"):
+            if t == "!":
+                if not st:
+                    raise LogicError("Missing operand for '!'")
+                A = st.pop()
+                st.append(universe - A)
+            else:
+                if len(st) < 2:
+                    raise LogicError(f"Missing operands for {t}")
+                B = st.pop()
+                A = st.pop()
+                if t == "&":
+                    st.append(A & B)
+                else:
+                    st.append(A | B)
+        else:
+            st.append(set(sets[t]))
+
+    if len(st) != 1:
+        raise LogicError("Invalid logic expression evaluation")
+
+    return st[0]
 
 def remove_water_from_pdb(source_file, dest_file):
     """Remove water molecules from a PDB or mmCIF file and save the cleaned version safely."""
@@ -48,58 +125,113 @@ def remove_water_from_pdb(source_file, dest_file):
     
 def get_exposed_residues(graph: Graph, rsa_filter = 0.1, asa_filter = 100.0, selection_params=None) -> nx.Graph:
     selection_params = selection_params or {}
+    logic_expr = selection_params.get("logic")
 
     graph.create_subgraph(name="exposed_residues", rsa_threshold=rsa_filter, asa_threshold=asa_filter)
     
-    if not any(key in selection_params for key in ("chains", "residues")):
-        expo = graph.get_subgraph(name="exposed_residues")
-        if expo is not None:
-            return expo
-        raise Exception("I didn't find any nodes that passes in your filter")        
- 
-    merge_keys = []
-    
+    exposed = graph.get_subgraph("exposed_residues")
+    if exposed is None or exposed.number_of_nodes() == 0:
+        raise Exception("No exposed residues found")
+
+    sets: Dict[str, set] = {}
+    sets["exposed"] = set(exposed.nodes())
+
+    universe = set(graph.graph.nodes())
+
     if "chains" in selection_params:
-        if not isinstance(selection_params["chains"], list):
-            logger.warning(f"`chains` key must have a list. Received: {selection_params['chains']}, {type(selection_params['chains'])}")
-            raise ValueError("Invalid chains parameter")
-        
-        graph.create_subgraph(name="selected_chains", chains=selection_params["chains"])
-        merge_keys.append("selected_chains")
-    
+        chains_cfg = selection_params["chains"]
+        if not isinstance(chains_cfg, list):
+            raise TypeError(f"`chains` must be list, got {type(chains_cfg)}")
+        graph.create_subgraph(name="selected_chains", chains=chains_cfg)
+        chains_sub = graph.get_subgraph("selected_chains")
+        sets["chains"] = set(chains_sub.nodes()) if chains_sub is not None else set()
+
     if "residues" in selection_params:
-        if not isinstance(selection_params["residues"], dict):
-            logger.warning(f"`residues` key must be a dictionary. Received: {selection_params['residues']}, {type(selection_params['residues'])}")
-            raise ValueError("Invalid residues parameter")
-        
+        residues_cfg = selection_params["residues"]
+        if not isinstance(residues_cfg, dict):
+            raise TypeError(f"`residues` must be dict, got {type(residues_cfg)}")
+
         residue_positions = []
-        for chain, positions in selection_params["residues"].items():
+        for chain, positions in residues_cfg.items():
             if not isinstance(positions, list):
-                logger.warning(f"Value for chain '{chain}' in residues must be a list. Received: {positions}")
-                raise ValueError("Invalid residues list")
+                raise TypeError(
+                    f"Value for chain '{chain}' in residues must be a list, got {type(positions)}"
+                )
             residue_positions.extend(positions)
 
-        graph.create_subgraph(name="all_residues", sequence_positions=residue_positions)
-        merge_keys.append("all_residues")
-    
-    graph.join_subgraph(name="merge_list", graphs_name=merge_keys)
-    
+        graph.create_subgraph(name="selected_residues",
+                              sequence_positions=residue_positions)
+        r_sub = graph.get_subgraph("selected_residues")
+        sets["residues"] = set(r_sub.nodes()) if r_sub is not None else set()
 
-    exposed_nodes = graph.filter_subgraph(
-        subgraph_name="exposed_residues",
-        name="selected_exposed_residues",
-        filter_func=lambda node: node in graph.subgraphs["merge_list"],
-        return_node_list=True
-    )
+    if "structures" in selection_params:
+        structures_cfg = selection_params["structures"]
 
-    if exposed_nodes:
-        graph.create_subgraph(name="s_graph", node_list=exposed_nodes, return_node_list=False)
-        
-        s_graph = graph.get_subgraph("s_graph")
-        if s_graph is not None:        
-            return s_graph
-    
-    raise Exception("I didn't find any nodes that passes in your filter")        
+        if isinstance(structures_cfg, list):
+            print(f"structures_cfg: {structures_cfg}")
+            graph.create_subgraph(name="selected_structures",
+                                  ss_elements=structures_cfg)
+            s_sub = graph.get_subgraph("selected_structures")
+            sets["structures"] = set(s_sub.nodes()) if s_sub is not None else set()
+
+        elif isinstance(structures_cfg, dict):
+            allowed_by_chain = {
+                ch: set(vals)
+                for ch, vals in structures_cfg.items()
+                if ch != "*"
+            }
+            default_structs = set(structures_cfg.get("*", []))
+
+            G = graph.graph
+            selected_nodes = []
+            for n, d in G.nodes(data=True):
+                label = str(n)
+                parts = label.split(":")
+                if len(parts) < 3:
+                    continue
+                chain_id = parts[0]
+
+                allowed_ss = allowed_by_chain.get(chain_id, default_structs)
+                if not allowed_ss:
+                    continue
+
+                ss = d.get("ss", None)
+                if ss in allowed_ss:
+                    selected_nodes.append(n)
+
+            graph.create_subgraph(name="selected_structures_nodes",
+                                  node_list=selected_nodes,
+                                  return_node_list=False)
+            sets["structures"] = set(selected_nodes)
+
+        else:
+            raise TypeError(
+                f"`structures` must be list or dict, got {type(structures_cfg)}"
+            )
+
+    if not logic_expr:
+        active_sets = [sets["exposed"]]
+        for key in ("chains", "residues", "structures"):
+            if key in sets:
+                active_sets.append(sets[key])
+        selected = set.intersection(*active_sets) if active_sets else sets["exposed"]
+    else:
+        selected = _eval_logic_expression(logic_expr, sets, universe)
+        if "exposed" in sets and "exposed" not in logic_expr:
+            selected &= sets["exposed"]
+
+    if not selected:
+        raise Exception("I did not find any nodes that pass your filter/logic")
+
+    graph.create_subgraph(name="s_graph",
+                          node_list=list(selected),
+                          return_node_list=False)
+
+    s_graph = graph.get_subgraph("s_graph")
+    if s_graph is not None:
+        return s_graph
+
+    raise Exception("Unexpected error: s_graph is None")
 
 def _is_within(child: Path, parent: Path) -> bool:
     """True se child está dentro de parent (ou igual)."""
@@ -121,19 +253,78 @@ def _name_contains(fname: str, cond: Any) -> bool:
         return False
 
 def _merge_constraints(base: Dict[str, Any], add: Dict[str, Any]) -> Dict[str, Any]:
-    """Une listas de cadeias e posições de resíduos."""
-    out: Dict[str, Any] = {"chains": [], "residues": {}}
+    """
+    Merge chain, residue, and structure constraints from two selector blocks.
+
+    Parameters
+    ----------
+    base : dict
+        First constraint dictionary.
+    add : dict
+        Second constraint dictionary.
+
+    Returns
+    -------
+    dict
+        Unified constraint dictionary containing merged chains, residue
+        positions per chain, and structure specifications. The ``structures``
+        field is preserved either as a list or as a dict; mixing both
+        representations across inputs is not allowed and raises TypeError.
+    """
+    out: Dict[str, Any] = {
+        "chains": [],
+        "residues": {},
+        "structures": None,
+    }
+
     for src in (base or {}, add or {}):
-        # chains
         chains = src.get("chains") or []
-        out["chains"].extend([c for c in chains if c not in out["chains"]])
-        # residues
+        for c in chains:
+            if c not in out["chains"]:
+                out["chains"].append(c)
+
         residues = src.get("residues") or {}
         for ch, positions in residues.items():
             lst = out["residues"].setdefault(ch, [])
             for p in positions:
                 if p not in lst:
                     lst.append(p)
+
+        structures = src.get("structures", None)
+        if structures is None:
+            continue
+
+        if isinstance(structures, list):
+            if out["structures"] is None:
+                out["structures"] = []
+            elif isinstance(out["structures"], dict):
+                raise TypeError(
+                    "Cannot merge list 'structures' with dict 'structures' in constraints."
+                )
+            for s in structures:
+                if s not in out["structures"]:
+                    out["structures"].append(s)
+
+        elif isinstance(structures, dict):
+            if out["structures"] is None:
+                out["structures"] = {}
+            elif isinstance(out["structures"], list):
+                raise TypeError(
+                    "Cannot merge dict 'structures' with list 'structures' in constraints."
+                )
+            for ch, vals in structures.items():
+                lst = out["structures"].setdefault(ch, [])
+                for v in vals:
+                    if v not in lst:
+                        lst.append(v)
+        else:
+            raise TypeError(
+                f"'structures' must be list or dict, got {type(structures)}"
+            )
+
+    if out["structures"] is None:
+        out["structures"] = []
+
     return out
 
 def _infer_is_dir_or_file(path_str: str) -> str:
@@ -175,14 +366,12 @@ def collect_selected_files_from_manifest(manifest):
                 results.append({"input_path": str(p), "name": p.name})
             else:
                 if enable_tui:
-                    # TUI no MESMO formato que você usava
                     names = list_pdb_files(str(p), extensions=extensions)
                     selected = get_user_selection(names, str(p))
                     for full_path, fname in selected:
                         results.append({"input_path": str(Path(full_path).resolve()),
                                         "name": fname})
                 else:
-                    # modo não interativo: pega todos do diretório (sem recursão, estilo original)
                     if not p.exists() or not p.is_dir():
                         continue
                     for fname in sorted(os.listdir(p)):
@@ -190,7 +379,6 @@ def collect_selected_files_from_manifest(manifest):
                             full = (p / fname).resolve()
                             results.append({"input_path": str(full), "name": fname})
 
-    # dedup
     seen = set()
     out = []
     for it in results:
@@ -205,6 +393,8 @@ def resolve_selection_params_for_file(file_path: Path, manifest: Dict[str, Any])
     fname = file_path.name
     fpath_str = str(file_path.resolve())
     merged: Dict[str, Any] = {}
+    merged_logic: Optional[str] = None
+
     for rule in manifest.get("inputs", []):
         paths = rule.get("path")
         if not paths:
@@ -243,6 +433,19 @@ def resolve_selection_params_for_file(file_path: Path, manifest: Dict[str, Any])
                 continue
             spec = manifest.get("selectors", {}).get(name, {})
             merged = _merge_constraints(merged, spec)
+
+            logic_expr = spec.get("logic")
+            if logic_expr:
+                if merged_logic and merged_logic != logic_expr:
+                    logger.warning(
+                        f"Conflicting logic for {file_path.name}: "
+                        f"{merged_logic!r} vs {logic_expr!r}. Using last one."
+                    )
+                merged_logic = logic_expr
+
+    if merged_logic:
+        merged["logic"] = merged_logic
+
     return merged
 
 def create_graphs(manifest: Dict) -> List[Tuple]:
@@ -305,8 +508,17 @@ def create_graphs(manifest: Dict) -> List[Tuple]:
             with_html=True,
         )
 
+        graph_instance.save_filtered_pdb(
+            g=subgraph,
+            output_path=sub_dir,
+            name=f"{base_name}_filtered",
+            use_cif=True
+        )
+
+
         save("create_graphs", f"{graph_path.stem}_subgraph", subgraph)
         graphs.append((subgraph, str(orig_path)))
+
     end = time.perf_counter()
 
     logger.debug(f"Took {end - start:.6f} seconds to create graphs")

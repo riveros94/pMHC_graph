@@ -655,16 +655,19 @@ def extract_subgraph_from_secondary_structure(
         If any node lacks the 'ss' attribute.
     """
     node_list: List[str] = []
-
+    input(f"ss_elements: {set(ss_elements)}")
     for n, d in g.nodes(data=True):
         if "ss" not in d:
             raise ProteinGraphConfigurationError(
                 f"Secondary structure not set for node {n}. Annotate 'ss' first."
             )
+        print(f"node: {n} | ss: {d['ss']}")
         if d["ss"] in set(ss_elements):
             node_list.append(n)
-
+    
     node_list = list(dict.fromkeys(node_list))
+    print(f"node_list: {node_list}")
+
     return extract_subgraph_from_node_list(
         g,
         node_list,

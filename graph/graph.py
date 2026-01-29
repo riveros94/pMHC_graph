@@ -58,7 +58,7 @@ class Graph:
         """
         self.graph_path = graph_path
         self.config = config or make_default_config(
-            centroid_threshold=8.5,
+            edge_threshold=8.5,
             granularity="all_atoms",  # "all_atoms" | "backbone" | "side_chain" | "ca_only"
             exclude_waters=False,
         )
@@ -114,12 +114,19 @@ class Graph:
 
         return None
 
-    def join_subgraph(self, name: str, graphs_name: list, return_node_list: bool = False):
+    def join_subgraph(self, name: str, graphs_name: list, mode: str = "add", return_node_list: bool = False):
         if name in self.subgraphs.keys():
             print(f"You already have this subgraph created. Use graph.delete_subraph({name}) before creating it again.")
         elif set(graphs_name).issubset(self.subgraphs.keys()):
-            
-            self.subgraphs[name] = self.graph.subgraph([node for i in graphs_name for node in self.subgraphs[i].nodes])
+            if mode == "add":
+                self.subgraphs[name] = self.graph.subgraph([node for i in graphs_name for node in self.subgraphs[i].nodes])
+            elif mode == "intersection":
+                intersection = set()
+                for i, graph_name in enumerate(graphs_name):
+                    intersection = set(self.subgraphs[graph_name].nodes) if i == 0 else intersection.intersection(self.subgraphs[graph_name].nodes)
+
+                self.subgraphs[name] = self.graph.subgraph(list(intersection))
+
             if return_node_list:
                 return self.subgraphs[name].nodes
         else:
@@ -164,6 +171,59 @@ class Graph:
             "edges": edges,
             "neighbors": neighbors,
         }
+
+    def save_filtered_pdb(self, 
+        g: nx.Graph, 
+        output_path: Union[str, Path],
+        name: str, 
+        use_cif: bool = False):
+
+        parser = PDBParser(QUIET=True)
+        orig = parser.get_structure("orig", self.graph_path)
+
+        node_labels = set(g.nodes())
+        new_struct = Structure.Structure("filtered")
+        model = Model.Model(0)
+        new_struct.add(model)
+
+        for chain in orig[0]:
+            new_chain = Chain.Chain(chain.id)
+            for res in chain:
+                chain_id = chain.id
+                resname = res.get_resname()
+                seqid = res.id[1]
+                icode = res.id[2] if res.id[2] != " " else ""
+                label = f"{chain_id}:{resname}:{seqid}{icode}"
+                if label in node_labels:
+                    new_res = Residue.Residue(res.id, resname, res.segid)
+                    for atom in res:
+                        new_atom = Atom.Atom(
+                            atom.get_name(),
+                            atom.get_coord().copy(),
+                            atom.get_bfactor(),
+                            atom.get_occupancy(),
+                            atom.get_altloc(),
+                            atom.get_fullname(),
+                            atom.get_serial_number(),
+                            element=atom.element
+                        )
+                        new_res.add(new_atom)
+                    new_chain.add(new_res)
+            if len(new_chain):
+                model.add(new_chain)
+
+        out_dir = Path(output_path)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_file = out_dir / f"{name}.cif" if use_cif else out_dir / f"{name}.pdb"
+
+        if use_cif:
+            io = MMCIFIO()
+        else:
+            io = PDBIO()
+
+        io.set_structure(new_struct)
+        io.save(str(out_file))
+        print(f"Filtered structure saved to {out_file}")
 
     def save_subgraph_view(
         self,

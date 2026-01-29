@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from core.config import GraphConfig
+from core.config import GraphConfig, DSSPConfig
+from core.metadata import secondary_structure
 
 import json
 import logging
@@ -866,6 +867,15 @@ class PDBGraphBuilder:
                 rsa=None if rsa is None else float(rsa),
             )
 
+        residue_map = {nid: res for nid, res, _ in res_tuples}
+
+        secondary_structure(
+            G,
+            dssp_config=DSSPConfig(executable="mkdssp"),
+            structure=self.structure,
+            residue_map=residue_map,
+            pdb_path=str(self.pdb_path)
+        )
 
         interacting_nodes = np.where(dist_mat <= self.config.residue_distance_cutoff)
         interacting_nodes = list(zip(interacting_nodes[0], interacting_nodes[1]))
