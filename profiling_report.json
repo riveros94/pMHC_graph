@@ -1,4 +1,22 @@
 {
   "debug": true,
-  "steps": []
+  "steps": [
+    {
+      "step": 1,
+      "num_items": 2,
+      "num_chunks": 1,
+      "chunks": [
+        {
+          "chunk_idx": 0,
+          "num_triads_in_chunk": 2,
+          "time_sec": 0.0479753379986505,
+          "mem_before_mb": 242.1875,
+          "mem_after_mb": 245.64453125
+        }
+      ],
+      "time_sec": 0.04807449799773167,
+      "mem_before_mb": 242.1875,
+      "mem_after_mb": 245.64453125
+    }
+  ]
 }

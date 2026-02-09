@@ -176,7 +176,8 @@ def get_exposed_residues(graph: Graph, rsa_filter = 0.1, asa_filter = 100.0, sel
 
         for cid, nodes in per_chain.items():
             sets[f"residues:{cid}"] = nodes
-
+    
+    print(f"Selection params: {selection_params}")
     if "structures" in selection_params:
         structures_cfg = selection_params["structures"]
 
@@ -232,6 +233,8 @@ def get_exposed_residues(graph: Graph, rsa_filter = 0.1, asa_filter = 100.0, sel
             sets["structures"] = set(selected_nodes)
             for cid, nodes in per_chain.items():
                 sets[f"structures:{cid}"] = nodes
+        elif structures_cfg is None:
+            pass
         else:
             raise TypeError(
                 f"`structures` must be list or dict, got {type(structures_cfg)}"

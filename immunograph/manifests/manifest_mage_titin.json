@@ -14,13 +14,8 @@
     "distance_diff_threshold": 2.0,
     "distance_std_threshold": 3.0,
     "distance_bin_width": 2.0,
-    "dynamic_distance_classes": true,
-    "filter_triads_by_chain": ["C"],
-    "distance_bins": 3,
-    "rsa_bins": 3,
     "depth_bins": 3,
 
-    "serd_config": null,
 
     "classes_": {
       "residues": {
@@ -36,7 +31,7 @@
 
   "inputs": [
     {
-      "path": ["pdb_input/"],
+      "path": ["~/GithubProjects/Backup PMHC/pdb_input/"],
       "enable_tui": true,
       "extensions": [".pdb", ".pdb.gz", ".cif"], 
       "selectors": [
