@@ -490,9 +490,9 @@ class AssociatedGraph:
         self.output_path = Path(output_path)
         self.run_name = run_name
         
-        self.graph_data = self._prepare_graph_data()
+        self.graphs_data = self._prepare_graph_data()
         
-        result = association_product(graph_data=self.graph_data,
+        result = association_product(graphs_data=self.graphs_data,
                                     config=self.association_config)
         
         if result is not None:
@@ -561,7 +561,7 @@ class AssociatedGraph:
             - "rsa": np.array(g.graph["dssp_df"]["rsa"]).
             - "depth": g.depth.
         """
-        graph_data = []
+        graphs_data = []
         for i, (g, pdb_file) in enumerate(self.graphs):
             contact_map, residue_map, residue_map_all = build_contact_map(pdb_file, exclude_waters=self.association_config["exclude_waters"])
           
@@ -577,9 +577,9 @@ class AssociatedGraph:
                 "rsa": g.graph["dssp_df"]["rsa"],
                 "pdb_file": pdb_file
             }
-            graph_data.append(data)
+            graphs_data.append(data)
         
-        return graph_data
+        return graphs_data
     
 
     def create_pdb_per_protein(self):
@@ -615,7 +615,7 @@ class AssociatedGraph:
                         resnum, icode = self._parse_resnum_and_icode(resnum_str)
 
                         hetflag, _, _ = orig_res.id
-                        res_id = (hetflag, resnum, icode)
+                        res_id = (hetflag, f"{resnum}:{chain_name}", icode)
 
                         new_res = Residue.Residue(res_id, orig_res.resname, orig_res.segid)
 
@@ -631,9 +631,7 @@ class AssociatedGraph:
                                 element=atom.element
                             )
                             new_res.add(new_atom)
-
                         chain.add(new_res)
-
                     model.add(chain)
 
             out_dir = self.output_path / "frames"

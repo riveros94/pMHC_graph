@@ -1,24 +1,22 @@
 from immunograph.core.tracking import save
 
-from Bio.PDB import *
-from collections import defaultdict
 import numpy as np
 from itertools import combinations, product
 from Bio.PDB.Atom import Atom
 from Bio.PDB.Residue import Residue
+from Bio.PDB.PDBParser import PDBParser
+from Bio.PDB.MMCIFParser import MMCIFParser
 import networkx as nx
 import time
 from os import path
 import os
 import pandas as pd
-from collections import Counter
 from typing import Any, FrozenSet, Tuple, List, Optional, Union, Dict, Set, Iterable, Sequence
 import logging
 import matplotlib.pyplot as plt
 from sklearn.metrics.pairwise import cosine_similarity
 import json
 import math
-from statistics import pstdev
 import bisect
 from immunograph.utils.vis_tracer import TraversalTracer
 
@@ -180,7 +178,7 @@ def value_to_class(
     inverse: bool = False,
     upper_bound: float = 100.0,
     close_tolerance: float = 0.1,  # Absolute tolerance in 'value' units
-) -> Optional[Union[int, List[int]]]:
+    ) -> Union[int, List[int], None]:
     """
     Non-inverse:
       - Domain: (0, threshold]
@@ -948,7 +946,7 @@ def execute_step(
     graph_collection,
     max_chunks: int,
     current_filtered_cross_combos,
-    graph_data,
+    graphs_data,
     global_state,
 ):
 
@@ -997,7 +995,7 @@ def execute_step(
             step_idx=step_idx,
             chunk_idx=chunk_idx,
             chunk_triads=chunk_triads,
-            graph_data=graph_data,
+            graphs_data=graphs_data,
             global_state=global_state,
         )
 
@@ -1043,7 +1041,7 @@ def execute_step(
 
     return new_filtered_cross_combos, all_step_graphs
 
-def process_chunk(step_idx, chunk_idx, chunk_triads, graph_data, global_state):
+def process_chunk(step_idx, chunk_idx, chunk_triads, graphs_data, global_state):
     config = global_state["config"]
     dm_thresh = global_state["dm_thresh"]
     inv_maps = global_state["inv_maps"]
@@ -1207,7 +1205,7 @@ def process_chunk(step_idx, chunk_idx, chunk_triads, graph_data, global_state):
     return rebuilt_combos, final_graphs
 
 
-def association_product(graph_data: list,
+def association_product(graphs_data: list,
                         config: dict,
                         debug: bool = True) -> Union[Dict[str, List], None]:
     logger = logging.getLogger("association.association_product")
@@ -1220,15 +1218,14 @@ def association_product(graph_data: list,
     classes = config.get("classes", {})
     max_chunks = config.get("max_chunks", 5)
 
-    output_path = config.get("output_path", "./outputs")
 
     graph_collection = {
-        "graphs": [gd["graph"] for gd in graph_data],
-        "triads": [find_triads(gd, classes, config, checks) for gd in graph_data],
-        "contact_maps": [gd["contact_map"] for gd in graph_data],
-        "residue_maps_all": [gd["residue_map_all"] for gd in graph_data],
-        "rsa_maps": [gd["rsa"] for gd in graph_data],
-        "nodes_graphs": [sorted(list(gd["graph"].nodes())) for gd in graph_data]
+        "graphs": [gd["graph"] for gd in graphs_data],
+        "triads": [find_triads(gd, classes, config, checks) for gd in graphs_data],
+        "contact_maps": [gd["contact_map"] for gd in graphs_data],
+        "residue_maps_all": [gd["residue_map_all"] for gd in graphs_data],
+        "rsa_maps": [gd["rsa"] for gd in graphs_data],
+        "nodes_graphs": [sorted(list(gd["graph"].nodes())) for gd in graphs_data]
     }
  
     save("association_product", "graph_collection", graph_collection)
@@ -1321,7 +1318,7 @@ def association_product(graph_data: list,
             graph_collection,
             max_chunks,
             filtered_cross_combos,
-            graph_data=graph_data,
+            graphs_data=graphs_data,
             global_state={
                 "dm_thresh": dm_thresh,
                 "inv_maps": inv_maps,
@@ -1885,7 +1882,7 @@ def build_contact_map(
     exclude_waters: bool = True,
     atom_preference: Tuple[str, str] = ("CB", "CA"),
     water_atom_preference: Tuple[str, ...] = ("O", "OW", "OH2"),
-    fallback_any_atom: bool = True) -> Tuple[np.ndarray, Dict[Tuple[str, int], int], Dict[Tuple[str, int, str], int]]:
+    fallback_any_atom: bool = True) -> Tuple[np.ndarray, Dict[Tuple[str, str], int], Dict[Tuple[str, str, str], int]]:
     """
     Build a residue–residue distance (contact) map using representative atoms.
 
@@ -1918,7 +1915,6 @@ def build_contact_map(
     - Only the first model is used for deterministic behavior.
     - Residues missing all representative options are skipped.
     """
-    from Bio.PDB import PDBParser, MMCIFParser
 
     WATER_NAMES = {"HOH", "H2O", "WAT", "TIP3", "SOL"}
 
@@ -1941,14 +1937,12 @@ def build_contact_map(
             hetfield, resseq, _icode = residue.id  # (het, number, icode)
             res_name = residue.get_resname().strip()
             is_water = (hetfield == "W") or (res_name in WATER_NAMES)
+            coord = None
 
             # Skip waters if not requested
             if is_water and exclude_waters:
                 continue
-
-            coord = None
-
-            if is_water:
+            elif is_water:
                 # Prefer oxygen-like atom names for waters
                 for atom_name in water_atom_preference:
                     if residue.has_id(atom_name):
@@ -1960,18 +1954,14 @@ def build_contact_map(
                     if residue.has_id(atom_name):
                         coord = residue[atom_name].get_coord()
                         break
-
-            # Fallback: any atom available (useful for ligands or odd residues)
-            if coord is None and fallback_any_atom:
-                try:
-                    atom = next(residue.get_atoms())
-                    coord = atom.get_coord()
-                except StopIteration:
-                    pass
-
-            if coord is None:
-                # No representative atom found; skip this residue
-                continue
+                else:
+                    # Fallback: any atom available (useful for ligands or odd residues)
+                    if coord is None and fallback_any_atom:
+                        try:
+                            atom = next(residue.get_atoms())
+                            coord = atom.get_coord()
+                        except StopIteration:
+                            continue
 
             residue_full = residue.get_full_id()
             icode = residue_full[-1][-1] 

@@ -16,4 +16,6 @@ Analysis/**/*
 CrossSteps/
 CrossSteps/*
 CrossSteps/**/*
+CrossGraphs/*
+CrossGraphs/**/*
 data/

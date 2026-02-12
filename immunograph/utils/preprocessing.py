@@ -177,7 +177,6 @@ def get_exposed_residues(graph: Graph, rsa_filter = 0.1, asa_filter = 100.0, sel
         for cid, nodes in per_chain.items():
             sets[f"residues:{cid}"] = nodes
     
-    print(f"Selection params: {selection_params}")
     if "structures" in selection_params:
         structures_cfg = selection_params["structures"]
 
@@ -486,7 +485,8 @@ def create_graphs(manifest: Dict) -> List[Tuple]:
 
     output_path = Path(S["output_path"]).expanduser().resolve()
     output_path.mkdir(parents=True, exist_ok=True)
-
+    
+    # Retrieve the list of files passed via manifest.
     selected_files = collect_selected_files_from_manifest(manifest)
     if not selected_files:
         raise Exception("Nenhum arquivo selecionado a partir do manifest")
